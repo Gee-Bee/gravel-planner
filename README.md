@@ -51,14 +51,15 @@ prefills the Squadrats uid):
 
 ```yaml
 squares_uid: your-squadrats-uid   # optional — prefills the Squadrats uid
-dom:
-  label: Home
-  lon: 16.0   # decimal degrees, -180..180
-  lat: 52.0   # decimal degrees, -90..90
-praca:
-  label: Work
-  lon: 16.1
-  lat: 52.1
+pois:
+  dom:
+    label: Home
+    lon: 16.0   # decimal degrees, -180..180
+    lat: 52.0   # decimal degrees, -90..90
+  praca:
+    label: Work
+    lon: 16.1
+    lat: 52.1
 ```
 
 Without a saved config the planner stays disabled and asks for the paste.

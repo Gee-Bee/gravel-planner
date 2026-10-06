@@ -15,22 +15,23 @@ export class ConfigError extends Error {
 // Template shown in the textarea until a real config is saved (dummy coordinates).
 export const EXAMPLE_YAML = [
   '#squares_uid: your-squadrats-uid  # optional — prefills the Squadrats uid',
-  'dom:',
-  '  label: Home',
-  '  lon: 16.0',
-  '  lat: 52.0',
-  'praca:',
-  '  label: Work',
-  '  lon: 16.1',
-  '  lat: 52.1',
+  'pois:',
+  '  poi1:',
+  '    label: Home',
+  '    lon: 16.0',
+  '    lat: 52.0',
+  '  poi2:',
+  '    label: Work',
+  '    lon: 16.1',
+  '    lat: 52.1',
 ].join('\n');
 
 export function loadConfigRaw() {
   return localStorage.getItem(CONFIG_KEY) ?? '';
 }
 
-// `squares_uid` is a reserved top-level key (optional scalar) — it prefills
-// the Squadrats uid; every other top-level key is a start point.
+// Top-level keys: `pois:` (mapping of start points) and the optional scalar
+// `squares_uid` — anything else is a typo, rejected with a hint.
 export function parseConfigYaml(text) {
   let doc;
   try {
@@ -40,7 +41,12 @@ export function parseConfigYaml(text) {
   }
   if (doc == null) return { starts: {}, uid: '' };
   if (typeof doc !== 'object' || Array.isArray(doc)) {
-    throw new ConfigError('config must be a mapping: "name:" with label/lon/lat fields');
+    throw new ConfigError('config must be a mapping: "pois:" with label/lon/lat fields');
+  }
+  for (const key of Object.keys(doc)) {
+    if (key !== 'pois' && key !== 'squares_uid') {
+      throw new ConfigError(`unknown top-level key "${key}" — start points live under "pois:"`);
+    }
   }
   const uid = ['string', 'number'].includes(typeof doc.squares_uid)
     ? String(doc.squares_uid).trim()
@@ -49,19 +55,24 @@ export function parseConfigYaml(text) {
   // scalars explicitly so a forgotten value can't silently become 0°.
   const bad = (x) => x == null || x === '' || typeof x === 'boolean';
   const starts = {};
-  for (const [key, v] of Object.entries(doc)) {
-    if (key === 'squares_uid') continue;
-    if (v == null || typeof v !== 'object' || Array.isArray(v)) {
-      throw new ConfigError(`"${key}": expected "label/lon/lat" fields`);
+  const pois = doc.pois;
+  if (pois != null) {
+    if (typeof pois !== 'object' || Array.isArray(pois)) {
+      throw new ConfigError('"pois:" must be a mapping of "name:" with label/lon/lat fields');
     }
-    const lon = Number(v.lon);
-    const lat = Number(v.lat);
-    if (bad(v.lon) || bad(v.lat) ||
-        !Number.isFinite(lon) || !Number.isFinite(lat) ||
-        Math.abs(lon) > 180 || Math.abs(lat) > 90) {
-      throw new ConfigError(`"${key}": lon/lat must be decimal degrees (lon -180..180, lat -90..90)`);
+    for (const [key, v] of Object.entries(pois)) {
+      if (v == null || typeof v !== 'object' || Array.isArray(v)) {
+        throw new ConfigError(`"${key}": expected "label/lon/lat" fields`);
+      }
+      const lon = Number(v.lon);
+      const lat = Number(v.lat);
+      if (bad(v.lon) || bad(v.lat) ||
+          !Number.isFinite(lon) || !Number.isFinite(lat) ||
+          Math.abs(lon) > 180 || Math.abs(lat) > 90) {
+        throw new ConfigError(`"${key}": lon/lat must be decimal degrees (lon -180..180, lat -90..90)`);
+      }
+      starts[key] = { label: String(v.label ?? key), lon, lat };
     }
-    starts[key] = { label: String(v.label ?? key), lon, lat };
   }
   return { starts, uid };
 }
