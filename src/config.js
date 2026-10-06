@@ -2,6 +2,7 @@
 // small YAML blob in the app (Configuration section), it is kept in this
 // browser's localStorage and parsed here on load.
 
+import { parse } from 'yaml';
 import { CONFIG_KEY } from './storage.js';
 
 export class ConfigError extends Error {
@@ -13,6 +14,7 @@ export class ConfigError extends Error {
 
 // Template shown in the textarea until a real config is saved (dummy coordinates).
 export const EXAMPLE_YAML = [
+  '#squares_uid: your-squadrats-uid  # optional — prefills the Squadrats uid',
   'dom:',
   '  label: Home',
   '  lon: 16.0',
@@ -27,46 +29,63 @@ export function loadConfigRaw() {
   return localStorage.getItem(CONFIG_KEY) ?? '';
 }
 
-// Minimal 2-level YAML: `name:` blocks with `label/lon/lat` scalars — enough
-// for start points, no dependency on a YAML library. `#` starts a comment.
+// `squares_uid` is a reserved top-level key (optional scalar) — it prefills
+// the Squadrats uid; every other top-level key is a start point.
 export function parseConfigYaml(text) {
-  const starts = {};
-  let current = null;
-  for (const [i, raw] of String(text ?? '').split('\n').entries()) {
-    const line = raw.replace(/#.*$/, '').trimEnd();
-    if (!line.trim()) continue;
-    if (/^\S/.test(line)) {
-      const key = line.trim().replace(/:$/, '');
-      if (!key) throw new ConfigError(`line ${i + 1}: empty start name`);
-      current = key;
-      starts[key] = {};
-    } else {
-      if (!current) throw new ConfigError(`line ${i + 1}: indented entry before any "name:"`);
-      const m = line.trim().match(/^([A-Za-z_-]+)\s*:\s*(\S.*)$/);
-      if (!m) throw new ConfigError(`line ${i + 1}: expected "key: value"`);
-      starts[current][m[1]] = m[2].trim();
-    }
+  let doc;
+  try {
+    doc = parse(String(text ?? ''));
+  } catch (err) {
+    throw new ConfigError(String(err.message).split('\n')[0]);
   }
-  for (const [key, v] of Object.entries(starts)) {
+  if (doc == null) return { starts: {}, uid: '' };
+  if (typeof doc !== 'object' || Array.isArray(doc)) {
+    throw new ConfigError('config must be a mapping: "name:" with label/lon/lat fields');
+  }
+  const uid = ['string', 'number'].includes(typeof doc.squares_uid)
+    ? String(doc.squares_uid).trim()
+    : '';
+  // Number(null)/Number('') are 0 and Number(true) is 1 — reject non-numeric
+  // scalars explicitly so a forgotten value can't silently become 0°.
+  const bad = (x) => x == null || x === '' || typeof x === 'boolean';
+  const starts = {};
+  for (const [key, v] of Object.entries(doc)) {
+    if (key === 'squares_uid') continue;
+    if (v == null || typeof v !== 'object' || Array.isArray(v)) {
+      throw new ConfigError(`"${key}": expected "label/lon/lat" fields`);
+    }
     const lon = Number(v.lon);
     const lat = Number(v.lat);
-    if (!Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lon) > 180 || Math.abs(lat) > 90) {
+    if (bad(v.lon) || bad(v.lat) ||
+        !Number.isFinite(lon) || !Number.isFinite(lat) ||
+        Math.abs(lon) > 180 || Math.abs(lat) > 90) {
       throw new ConfigError(`"${key}": lon/lat must be decimal degrees (lon -180..180, lat -90..90)`);
     }
     starts[key] = { label: String(v.label ?? key), lon, lat };
   }
-  return starts;
+  return { starts, uid };
+}
+
+// Tolerant read: a broken stored config must not blank the whole app —
+// the raw YAML stays in the textarea for fixing (saving reports the error).
+export function getConfig() {
+  const raw = loadConfigRaw();
+  if (!raw) return { starts: {}, uid: '' };
+  try {
+    return parseConfigYaml(raw);
+  } catch {
+    return { starts: {}, uid: '' };
+  }
 }
 
 export function getStarts() {
-  const raw = loadConfigRaw();
-  return raw ? parseConfigYaml(raw) : {};
+  return getConfig().starts;
 }
 
 // Validates before storing — localStorage only ever holds a parseable config.
 export function saveConfigYaml(text) {
-  const starts = parseConfigYaml(text);
-  if (!Object.keys(starts).length) throw new ConfigError('config is empty — add at least one start');
+  const cfg = parseConfigYaml(text);
+  if (!Object.keys(cfg.starts).length) throw new ConfigError('config is empty — add at least one start');
   localStorage.setItem(CONFIG_KEY, text.trim());
-  return starts;
+  return cfg;
 }

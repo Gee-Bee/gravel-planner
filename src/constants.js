@@ -4,7 +4,8 @@
 // kept in localStorage, parsed by src/config.js — nothing in the repo.
 
 // A4.1 — Squadrats trophies: the API resolves {uid} to the current CDN file;
-// the uid itself is per-browser (typed once in the UI, localStorage).
+// the uid is per-browser (typed in the UI or squares_uid in the config YAML;
+// localStorage) — no account id in the repo.
 export const SQUADRATS_API = 'https://mainframe-api.squadrats.com/anonymous/squadrants';
 
 // A4.4 — Web Mercator grid 16384²; latitude must NOT be indexed linearly in degrees.

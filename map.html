@@ -26,6 +26,15 @@
     }
     .sw { display: inline-block; width: 12px; height: 12px; vertical-align: -2px; margin-right: 4px; border: 1px solid #666; }
   </style>
+
+  <!-- src/config.js imports 'yaml' (bare specifier) — same map as index.html -->
+  <script type="importmap">
+    {
+      "imports": {
+        "yaml": "https://esm.sh/yaml@2.9.1"
+      }
+    }
+  </script>
 </head>
 <body>
   <div class="bar">

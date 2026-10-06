@@ -95,7 +95,8 @@
   <script type="importmap">
     {
       "imports": {
-        "lucide/route": "https://esm.sh/lucide@1.47.0/dist/esm/icons/route"
+        "lucide/route": "https://esm.sh/lucide@1.47.0/dist/esm/icons/route",
+        "yaml": "https://esm.sh/yaml@2.9.1"
       }
     }
   </script>
@@ -145,7 +146,7 @@
 
     <details id="config-details" class="config">
       <summary>Configuration — start points (YAML, saved in this browser)</summary>
-      <p class="hint">Private start points are stored only in this browser (localStorage), never in the repo. One block per start: <code>name:</code>, then <code>label</code>, <code>lon</code>, <code>lat</code> (decimal degrees).</p>
+      <p class="hint">Private start points are stored only in this browser (localStorage), never in the repo. One block per start: <code>name:</code>, then <code>label</code>, <code>lon</code>, <code>lat</code> (decimal degrees). Optional top-level <code>squares_uid</code> prefills the Squadrats uid.</p>
       <textarea id="config-yaml" rows="10" spellcheck="false" aria-label="Start points YAML"></textarea>
       <button type="button" id="save-config">Save config</button>
       <div id="config-status"></div>

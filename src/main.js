@@ -8,7 +8,7 @@ import { planRoutes } from './planner.js';
 import { fetchSquadratsGeojson } from './api/squadrats.js';
 import { parseVisitedPolygons } from './squares.js';
 import { loadUid, saveUid } from './storage.js';
-import { EXAMPLE_YAML, getStarts, loadConfigRaw, saveConfigYaml } from './config.js';
+import { EXAMPLE_YAML, getConfig, loadConfigRaw, saveConfigYaml } from './config.js';
 // §0.3 note: a BRouter/Squadrats fetch reports its exact URL on error.
 import Route from 'lucide/route';
 
@@ -30,12 +30,20 @@ mountHeaderIcon(Route);
 // Both grids ride along: squadrats (coarse, aiming) + squadratinhos (fine report).
 const squaresState = { uid: '', polygons: [], declaredSize: null, polygonsInho: [], declaredSizeInho: null };
 
-// Start points — parsed from the private YAML (localStorage); never in the repo.
-let starts = getStarts();
+// Start points + optional squares_uid — parsed from the private YAML
+// (localStorage); never in the repo.
+const cfg = getConfig();
+let starts = cfg.starts;
 
-// Prefill from localStorage (typed once per browser; no defaults in the repo);
-// page load uses the cache, only the explicit button bypasses it.
+// uid: the field (localStorage) wins; squares_uid from the YAML fills an empty
+// store ONCE — afterwards the store rules (removing squares_uid from the YAML
+// later doesn't log this browser out of its squares; clearing the field keeps
+// squares off until the next reload, when the YAML prefills it again).
 uidEl.value = loadUid();
+if (!uidEl.value && cfg.uid) {
+  uidEl.value = cfg.uid;
+  saveUid(cfg.uid);
+}
 if (uidEl.value) void fetchSquares(false);
 
 configYamlEl.value = loadConfigRaw() || EXAMPLE_YAML;
@@ -73,8 +81,14 @@ function applyStarts() {
 
 saveConfigBtn.addEventListener('click', () => {
   try {
-    starts = saveConfigYaml(configYamlEl.value);
+    const cfg = saveConfigYaml(configYamlEl.value);
+    starts = cfg.starts;
     applyStarts();
+    if (cfg.uid && !uidEl.value.trim()) {
+      uidEl.value = cfg.uid;
+      saveUid(cfg.uid);
+      void fetchSquares(false);
+    }
     const names = Object.values(starts).map((s) => s.label).join(', ');
     setConfigStatus(`Saved: ${Object.keys(starts).length} start(s) — ${names}.`);
   } catch (err) {

@@ -44,11 +44,13 @@ Start points (home, work, …) are **not in the repo** — the app is public and
 the coordinates must stay private. Paste them once in the app: **Configuration
 → start points (YAML)** at the bottom of the page, then **Save config**. The
 blob lives only in this browser's localStorage (`gravel-planner:config`); each
-device/browser needs its own paste. Format (a minimal 2-level parser, no YAML
-library; `#` starts a comment; the key is the start id, `label` shows in the
-select):
+device/browser needs its own paste. Format (standard YAML via the `yaml`
+package, importmap/esm.sh like the other deps; `#` comments; the key is the
+start id, `label` shows in the select; optional top-level `squares_uid`
+prefills the Squadrats uid):
 
 ```yaml
+squares_uid: your-squadrats-uid   # optional — prefills the Squadrats uid
 dom:
   label: Home
   lon: 16.0   # decimal degrees, -180..180
@@ -60,8 +62,8 @@ praca:
 ```
 
 Without a saved config the planner stays disabled and asks for the paste.
-The Squadrats uid is handled the same way: typed once in the form, kept in
-localStorage — no account id in the repo either.
+The Squadrats uid is per-browser too: typed in the form or taken once from
+`squares_uid` (clearing the field then sticks — no account id in the repo).
 
 ## Deploy (GitHub Pages)
 
