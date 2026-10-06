@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>planner — squares map (dev)</title>
+  <!-- Dev-only diagnostic: same trophy data the Squadrats extension draws on
+       bikerouter (this embedded Chromium cannot install extensions). -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
+    #map { position: absolute; inset: 0; }
+    .bar {
+      position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+      z-index: 1000; background: #fff; padding: 6px 8px; border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.25); display: flex; gap: 8px; align-items: center;
+      max-width: 92%; flex-wrap: wrap;
+    }
+    .bar input[type="text"] { width: 380px; max-width: 46vw; font-size: 12px; padding: 4px 6px; }
+    .bar button { font-size: 12px; padding: 4px 10px; cursor: pointer; }
+    .bar label { font-size: 11px; white-space: nowrap; user-select: none; }
+    #info { font-size: 11px; color: #444; }
+    .legend {
+      position: absolute; bottom: 12px; left: 12px; z-index: 1000; background: #ffffffdd;
+      padding: 6px 10px; border-radius: 8px; font-size: 11px; line-height: 1.6;
+    }
+    .sw { display: inline-block; width: 12px; height: 12px; vertical-align: -2px; margin-right: 4px; border: 1px solid #666; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <input id="url" type="text" placeholder="paste a bikerouter link (…&lonlats=…) or leave empty" />
+    <button id="draw">Draw</button>
+    <label title="Squadrats: coarse grid (16384²); any touch claims a cell forever — shaded = already yours."><input type="checkbox" id="t-sq" checked /> squadrats</label>
+    <label title="Squadratinhos: fine grid (8× smaller cells), same any-touch rule — shows the small gaps along ridden roads."><input type="checkbox" id="t-inh" checked /> squadratinhos</label>
+    <label title="Frontier: unvisited cells touching your visited area — where a ride can claim new squadrats; scanned around the route (or the start)."><input type="checkbox" id="t-fr" checked /> frontier</label>
+    <span id="info"></span>
+  </div>
+  <div class="legend">
+    <div title="Squadrats: the coarse grid (16384²). Ride through a cell — even one corner — and it is claimed forever; cells you already own are shaded."> visited squadrats</div>
+    <div title="Squadratinhos: the fine grid (8× smaller cells, 131072²), same rule — any touch claims it. Small gaps along ridden roads show as unshaded."> visited squadratinhos</div>
+    <div title="Frontier: unvisited cells 4-adjacent to your visited area — the nearest places a ride can claim new squadrats. Scanned around the drawn route (or the start)."> frontier (squadrats, local)</div>
+    <div title="Cells touched by the drawn route where no route point lies inside the visited union — i.e. squares you would claim by riding it (both grids)."> fresh touched cells</div>
+  </div>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script type="module">
+    import { fetchSquadratsGeojson } from './src/api/squadrats.js';
+    import { parseVisitedPolygons, isVisited, countNewCells, visitedCellsInBbox } from './src/squares.js';
+    import { fetchRouteGeojson, extractCoords } from './src/api/brouter.js';
+    import { cellIndex, cellCenter, cellKey, computeFrontier, bboxAroundKm } from './src/geometry.js';
+    import { loadUid } from './src/storage.js';
+    import { getStarts } from './src/config.js';
+
+    // Canvas renderer: SVG chokes on thousands of paths (froze the tab); canvas
+    // draws the same in one pass. Frontier is scanned LOCALLY (route/start bbox
+    // only) — the full-union scan blocked the main thread for ~10 s.
+    // Default center/bbox: the first configured start (private, localStorage).
+    const home = Object.values(getStarts())[0] ?? { lon: 0, lat: 0 };
+    const map = L.map('map', { preferCanvas: true }).setView([home.lat, home.lon], 11);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '© OpenStreetMap',
+    }).addTo(map);
+
+    // Separate groups → the checkboxes toggle heavy layers without recompute.
+    const gSq = L.layerGroup().addTo(map);
+    const gInh = L.layerGroup().addTo(map);
+    const gFrontier = L.layerGroup().addTo(map);
+    const gRoute = L.layerGroup().addTo(map);
+    const gFresh = L.layerGroup().addTo(map);
+    const bindToggle = (id, group) => {
+      const box = document.getElementById(id);
+      const apply = () => (box.checked ? map.addLayer(group) : map.removeLayer(group));
+      box.addEventListener('change', apply);
+      apply();
+    };
+    bindToggle('t-sq', gSq);
+    bindToggle('t-inh', gInh);
+    bindToggle('t-fr', gFrontier);
+
+    const info = (msg) => { document.getElementById('info').textContent = msg; };
+
+    // Cell → rectangle bounds for frontier/fresh overlays (from the cell index).
+    const cellRect = (key) => {
+      const [i, j] = key.split(':').map(Number);
+      const c = cellCenter(i, j);
+      const hw = (cellCenter(i + 1, j).lon - c.lon) / 2;
+      const hh = Math.abs(c.lat - cellCenter(i, j + 1).lat) / 2;
+      return [[c.lat + hh, c.lon - hw], [c.lat - hh, c.lon + hw]];
+    };
+
+    const toGeo = (parsed) => ({
+      type: 'FeatureCollection',
+      features: parsed.polygons.map(({ outer, holes }) => ({
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [outer, ...holes] },
+      })),
+    });
+
+    let trophy = null;
+    let frontierBbox = bboxAroundKm(home, 25); // around the configured start
+
+    async function loadTrophy() {
+      const uid = loadUid();
+      if (!uid) throw new Error('no Squadrats uid in this browser — set it in the app first');
+      const { geojson, timestamp } = await fetchSquadratsGeojson(uid);
+      const sq = parseVisitedPolygons(geojson, 'squadrats');
+      const st = parseVisitedPolygons(geojson, 'squadratinhos');
+      trophy = { timestamp, sq, st };
+      return trophy;
+    }
+
+    function renderUnions() {
+      gSq.clearLayers();
+      gInh.clearLayers();
+      const { sq, st } = trophy;
+      L.geoJSON(toGeo(sq), {
+        style: { color: '#6b6b1e', weight: 1, fillColor: '#8f8f3c', fillOpacity: 0.35 },
+      }).addTo(gSq);
+      if (st) {
+        L.geoJSON(toGeo(st), {
+          style: { color: '#1e9e99', weight: 0.7, fillColor: '#4cd7d0', fillOpacity: 0.2 },
+        }).addTo(gInh);
+      }
+    }
+
+    // Frontier = unvisited cells adjacent to visited ones, LOCAL bbox only
+    // (route area or start surroundings — the global scan froze the tab).
+    function renderFrontier() {
+      gFrontier.clearLayers();
+      const visited = visitedCellsInBbox(trophy.sq.polygons, frontierBbox);
+      const frontier = computeFrontier(visited, frontierBbox);
+      for (const key of frontier) {
+        L.rectangle(cellRect(key), {
+          color: '#ff7b00', weight: 1, fillOpacity: 0.35,
+        }).addTo(gFrontier);
+      }
+      return frontier.size;
+    }
+
+    // Fresh touched cells for a route (both grids), red rectangles.
+    function renderFresh(coords) {
+      gFresh.clearLayers();
+      const draw = (parsed, group) => {
+        const seen = new Map();
+        for (const [lon, lat] of coords) {
+          const { i, j } = cellIndex(lon, lat);
+          const k = cellKey(i, j);
+          if (!seen.has(k)) seen.set(k, !isVisited(parsed.polygons, lon, lat));
+        }
+        let fresh = 0;
+        for (const [k, isFresh] of seen) {
+          if (!isFresh) continue;
+          fresh++;
+          L.rectangle(cellRect(k), {
+            color: '#e63946', weight: 1.2, fillColor: '#e63946', fillOpacity: 0.4,
+          }).addTo(group);
+        }
+        return { fresh, touched: seen.size };
+      };
+      const sq = draw(trophy.sq, gFresh);
+      const st = trophy.st ? draw(trophy.st, gFresh) : null;
+      return { sq, st };
+    }
+
+    async function drawRoute(url) {
+      const lonlats = [...url.matchAll(/(\d+\.\d+),(\d+\.\d+)/g)].map((m) => [+m[1], +m[2]]);
+      if (lonlats.length < 2) { info('no lonlats in the URL'); return; }
+      info('routing…');
+      const { geojson } = await fetchRouteGeojson(lonlats.map(([lon, lat]) => ({ lon, lat })), { plain: true });
+      const coords = extractCoords(geojson);
+      gRoute.clearLayers();
+      L.geoJSON(geojson, { style: { color: '#f5b301', weight: 4, opacity: 0.9 } }).addTo(gRoute);
+      // Route bbox padded ~3 km — the frontier scan area for this route.
+      let w = 180, s = 90, e = -180, n = -90;
+      for (const [lon, lat] of coords) {
+        w = Math.min(w, lon); s = Math.min(s, lat); e = Math.max(e, lon); n = Math.max(n, lat);
+      }
+      frontierBbox = { w: w - 0.04, s: s - 0.025, e: e + 0.04, n: n + 0.025 };
+      renderFrontier();
+      map.fitBounds(L.latLngBounds(coords.map(([lon, lat]) => [lat, lon])), { padding: [20, 20] });
+      const r = renderFresh(coords);
+      info(`route ${coords.length} pts · sq ${r.sq.fresh}/${r.sq.touched}` +
+        (r.st ? ` · inh ${r.st.fresh}/${r.st.touched}` : ''));
+    }
+
+    document.getElementById('draw').addEventListener('click', async () => {
+      const url = document.getElementById('url').value.trim();
+      if (!trophy) {
+        info('loading trophy…');
+        await loadTrophy();
+        renderUnions();
+      }
+      if (url) await drawRoute(url);
+      else {
+        frontierBbox = bboxAroundKm(home, 25);
+        const n = renderFrontier();
+        info(`frontier near start: ${n} cells`);
+      }
+    });
+
+    // Auto: unions fast, frontier local (no global scan); a bikerouter URL in
+    // the hash (the app status link passes it verbatim, may be %-encoded).
+    const raw = location.hash.slice(1);
+    let decoded = '';
+    try { decoded = decodeURIComponent(raw); } catch { /* plain hash */ }
+    const routeUrl = [decoded, raw].find((s) => s.includes('lonlats=')) ?? '';
+    if (routeUrl) document.getElementById('url').value = routeUrl;
+
+    (async () => {
+      info('loading trophy…');
+      await loadTrophy();
+      info(`trophy ${trophy.timestamp ? new Date(trophy.timestamp).toLocaleDateString('pl-PL') : '?'} · ${trophy.sq.declaredSize} sq · ${trophy.st?.declaredSize ?? '?'} inh`);
+      renderUnions();
+      renderFrontier();
+      if (routeUrl) await drawRoute(routeUrl);
+    })().catch((err) => info(`error: ${err.message}`));
+  </script>
+</body>
+</html>

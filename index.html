@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gravel Route Planner</title>
+  <meta name="description" content="Gravel route planning from a distance D, with GPX export" />
+  <meta name="theme-color" content="#2a9d8f" />
+  <!-- lucide "route" icon as data URI; duplicated from lucide/route because the favicon must exist before JS runs -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232a9d8f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='6' cy='19' r='3'/%3E%3Cpath d='M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15'/%3E%3Ccircle cx='18' cy='5' r='3'/%3E%3C/svg%3E" />
+
+  <style>
+    :root {
+      --primary: #2a9d8f;
+      --primary-dark: #1f7a70;
+      --danger: #e63946;
+      --bg: #f4f1ea;
+      --card: #ffffff;
+      --text: #1d3557;
+      --muted: #6c757d;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg); color: var(--text);
+    }
+    header.app-header {
+      background: var(--primary); color: #fff;
+      padding: 0.6rem 1rem;
+    }
+    header.app-header h1 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+    header.app-header h1 svg { vertical-align: -0.14em; margin-right: 0.3rem; }
+    main { max-width: 480px; margin: 0 auto; padding: 1rem; }
+    #planner-form {
+      background: var(--card);
+      padding: 1rem;
+      border-radius: var(--radius);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    label { font-size: 0.75rem; font-weight: 600; color: var(--muted); display: block; margin-bottom: 0.15rem; }
+    select, input[type="number"] {
+      width: 100%; padding: 0.5rem; font-size: 0.9rem;
+      border: 1px solid #ccc; border-radius: var(--radius);
+      background: #fff; color: var(--text);
+    }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+    .form-grid .full { grid-column: 1 / -1; }
+    button.btn {
+      padding: 0.6rem 1rem; font-size: 0.9rem; font-weight: 600;
+      border: none; border-radius: var(--radius); cursor: pointer; width: 100%;
+    }
+    button.btn-primary { background: var(--primary); color: #fff; }
+    button.btn-primary:disabled { opacity: 0.5; cursor: wait; }
+    button.btn-primary:not(:disabled):hover { background: var(--primary-dark); }
+    #status { font-size: 0.8rem; color: var(--muted); margin-top: 0.75rem; min-height: 1.2em; overflow-wrap: anywhere; }
+    #status.error { color: var(--danger); font-weight: 600; }
+    #status a { color: var(--primary); font-weight: 600; overflow-wrap: anywhere; }
+    label small { font-weight: 400; }
+    .row { display: flex; align-items: center; gap: 0.5rem; }
+    .row input { flex: 1; min-width: 0; }
+    #fetch-squares {
+      flex: none; width: auto; padding: 0.5rem 0.7rem;
+      font-size: 0.8rem; background: #fff; color: var(--primary);
+      border: 1px solid var(--primary);
+    }
+    #fetch-squares:disabled { opacity: 0.5; cursor: wait; }
+    #squares-info { font-size: 0.75rem; color: var(--muted); margin-top: 0.4rem; min-height: 1em; overflow-wrap: anywhere; }
+    #squares-info.error { color: var(--danger); font-weight: 600; }
+    details.config {
+      margin-top: 1rem; background: var(--card);
+      padding: 0.6rem 1rem; border-radius: var(--radius);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    details.config summary { font-size: 0.8rem; font-weight: 600; color: var(--muted); cursor: pointer; }
+    details.config .hint { font-size: 0.75rem; color: var(--muted); margin: 0.6rem 0 0; }
+    details.config .hint code { background: var(--bg); padding: 0 0.25rem; border-radius: 4px; }
+    #config-yaml {
+      width: 100%; margin-top: 0.5rem; padding: 0.5rem;
+      font: 0.78rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      border: 1px solid #ccc; border-radius: var(--radius); resize: vertical;
+      background: #fff; color: var(--text);
+    }
+    #save-config {
+      margin-top: 0.5rem; padding: 0.5rem 0.7rem; font-size: 0.8rem; font-weight: 600;
+      background: #fff; color: var(--primary); border: 1px solid var(--primary);
+      border-radius: var(--radius); cursor: pointer;
+    }
+    #save-config:hover { background: var(--primary); color: #fff; }
+    #config-status { font-size: 0.75rem; color: var(--muted); margin-top: 0.4rem; min-height: 1em; overflow-wrap: anywhere; }
+    #config-status.error { color: var(--danger); font-weight: 600; }
+  </style>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "lucide/route": "https://esm.sh/lucide@1.47.0/dist/esm/icons/route"
+      }
+    }
+  </script>
+</head>
+<body>
+  <header class="app-header">
+    <h1>Gravel Route Planner</h1>
+  </header>
+
+  <main>
+    <form id="planner-form">
+      <div class="form-grid">
+        <div>
+          <label for="target-km">D [km] (required)</label>
+          <input type="number" id="target-km" name="targetKm" min="10" max="300" step="5" required value="50" />
+        </div>
+        <div>
+          <label for="start">Start <small>(from config)</small></label>
+          <select id="start" name="start"></select>
+        </div>
+        <div>
+          <label for="bearing">Bearing (auto = frontier-aimed)</label>
+          <select id="bearing" name="bearing">
+            <option value="auto" selected>Auto (new squares)</option>
+            <option value="n">N</option>
+            <option value="e">E</option>
+            <option value="s">S</option>
+            <option value="w">W</option>
+          </select>
+        </div>
+        <div class="full">
+          <label for="uid" title="How to get it: open squadrats.com while logged in → DevTools (F12) → Application → Local Storage → lastKnownUid. It is your account id — stable; it changes only with a new account. Saved in this browser.">Squadrats uid <small>(enables squares)</small></label>
+          <div class="row">
+            <input type="text" id="uid" name="uid" spellcheck="false" placeholder="empty = squares off"
+              title="How to get it: open squadrats.com while logged in → DevTools (F12) → Application → Local Storage → lastKnownUid. It is your account id — stable; it changes only with a new account." />
+            <button type="button" id="fetch-squares">Fetch squares</button>
+          </div>
+          <div id="squares-info"></div>
+        </div>
+        <div class="full">
+          <button type="submit" id="plan-btn" class="btn btn-primary">Plan route</button>
+        </div>
+      </div>
+    </form>
+
+    <div id="status"></div>
+
+    <details id="config-details" class="config">
+      <summary>Configuration — start points (YAML, saved in this browser)</summary>
+      <p class="hint">Private start points are stored only in this browser (localStorage), never in the repo. One block per start: <code>name:</code>, then <code>label</code>, <code>lon</code>, <code>lat</code> (decimal degrees).</p>
+      <textarea id="config-yaml" rows="10" spellcheck="false" aria-label="Start points YAML"></textarea>
+      <button type="button" id="save-config">Save config</button>
+      <div id="config-status"></div>
+    </details>
+  </main>
+
+  <script type="module" src="./src/main.js"></script>
+</html>

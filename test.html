@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>planner v7.1 — static tests</title>
+  <style>
+    body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; background: #f4f1ea; color: #1d3557; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.1rem; }
+    li { margin: 0.3rem 0; font-size: 0.9rem; }
+    .pass { color: #2a9d8f; }
+    .fail { color: #e63946; font-weight: 600; }
+    #summary { font-size: 0.95rem; font-weight: 600; margin-top: 1rem; }
+    #summary.pass { color: #2a9d8f; }
+    #summary.fail { color: #e63946; }
+  </style>
+</head>
+<body>
+  <h1>planner v7.1 (nubRuns / spliceNub / ringVias / squares parse) — static tests</h1>
+  <ul id="results"></ul>
+  <div id="summary"></div>
+
+  <script type="module">
+    import {
+      nubRuns,
+      spliceNub,
+      ringVias,
+      interiorDoubledKm,
+      stubVias,
+    } from './src/planner.js';
+    import {
+      parseVisitedPolygons,
+      pointInRing,
+      isVisited,
+      countNewCells,
+      visitedCellsInBbox,
+    } from './src/squares.js';
+    import {
+      cellIndex,
+      cellCenter,
+      bearingDeg as gridBearingDeg,
+      computeFrontier,
+    } from './src/geometry.js';
+    import { aimAtFrontier, frontierAnchors } from './src/planner.js';
+    import { DLON } from './src/constants.js';
+
+    const KM_PER_DEG_LAT = 111.32;
+    const LAT0 = 52.5;
+    const START = { lon: 0, lat: LAT0 };
+    const kmToLon = (km) => km / (KM_PER_DEG_LAT * Math.cos((LAT0 * Math.PI) / 180));
+    const kmToLat = (km) => LAT0 + km / KM_PER_DEG_LAT;
+    const xKm = (c) => (c[0] - START.lon) * KM_PER_DEG_LAT * Math.cos((LAT0 * Math.PI) / 180);
+    const yKm = (c) => (c[1] - LAT0) * KM_PER_DEG_LAT;
+    const near = (x, y, tol) => Math.abs(x - y) <= tol;
+
+    // Clean closed loop: start (0,0) north to (0,18), east to (10,18), south
+    // to (10,0), back west home. Fine 0.1 km grid. No interior twins.
+    const uLoop = () => {
+      const pts = [];
+      for (let y = 0; y <= 18; y += 0.1) pts.push([kmToLon(0), kmToLat(y)]);
+      for (let x = 0.1; x <= 10; x += 0.1) pts.push([kmToLon(x), kmToLat(18)]);
+      for (let y = 17.9; y >= 0; y -= 0.1) pts.push([kmToLon(10), kmToLat(y)]);
+      for (let x = 9.9; x >= 0; x -= 0.1) pts.push([kmToLon(x), kmToLat(0)]);
+      return pts;
+    };
+
+    // Out-and-back spike: north 10 km, return on the same line — one long
+    // interior doubled run.
+    const spike = () => {
+      const pts = [];
+      for (let y = 0; y <= 10; y += 0.25) pts.push([kmToLon(0), kmToLat(y)]);
+      for (let y = 10; y >= 0; y -= 0.25) pts.push([kmToLon(0), kmToLat(y)]);
+      return pts;
+    };
+
+    // Real probe shape (measured on Biedrusko): the ring rides up and east,
+    // at the FORK (4,10) dips into a dead-end finger (up + back the same
+    // strand), resumes at the fork and finishes the loop.
+    const nubLoop = () => {
+      const pts = [];
+      for (let y = 0; y <= 10; y += 0.1) pts.push([kmToLon(0), kmToLat(y)]);
+      for (let x = 0.1; x <= 4; x += 0.1) pts.push([kmToLon(x), kmToLat(10)]);
+      for (let y = 10.1; y <= 14; y += 0.1) pts.push([kmToLon(4), kmToLat(y)]);
+      for (let y = 13.9; y >= 10; y -= 0.1) pts.push([kmToLon(4), kmToLat(y)]);
+      for (let x = 4.1; x <= 10; x += 0.1) pts.push([kmToLon(x), kmToLat(10)]);
+      for (let y = 9.9; y >= 0; y -= 0.1) pts.push([kmToLon(10), kmToLat(y)]);
+      for (let x = 9.9; x >= 0; x -= 0.1) pts.push([kmToLon(x), kmToLat(0)]);
+      return pts;
+    };
+
+    const results = [];
+    const test = (name, fn) => {
+      try { fn(); results.push({ name, ok: true }); }
+      catch (e) { results.push({ name, ok: false, msg: e.message }); }
+    };
+    const assert = (cond, msg) => { if (!cond) throw new Error(msg); };
+
+    // ---- nubRuns ----
+
+    test('nubRuns: clean loop → no runs', () => {
+      const r = nubRuns(uLoop(), START);
+      assert(r.length === 0, `expected no doubled runs, got ${JSON.stringify(r)}`);
+    });
+
+    test('nubRuns: spike → one long interior run', () => {
+      const r = nubRuns(spike(), START);
+      assert(r.length === 1, `expected one merged run, got ${JSON.stringify(r)}`);
+      // Safe ends (±2.5 km) exempted from a 20 km track → run ≈ 15 km.
+      assert(near(r[0].km, 15, 0.6), `run ≈ 15 km expected, got ${r[0].km}`);
+    });
+
+    test('nubRuns: finger loop → exactly the finger, merged', () => {
+      const r = nubRuns(nubLoop(), START);
+      assert(r.length === 1, `expected one merged run, got ${JSON.stringify(r)}`);
+      // Finger up + down = 8 km of path between the same two points.
+      assert(near(r[0].km, 8, 0.6), `run ≈ 8 km expected, got ${r[0].km}`);
+    });
+
+    // ---- spliceNub ----
+
+    test('spliceNub: clean probe → junctionIdx null', () => {
+      const r = spliceNub(uLoop(), START);
+      assert(r.junctionIdx === null && r.nubKm === 0, `expected clean, got ${JSON.stringify(r)}`);
+    });
+
+    test('spliceNub: finger loop → fork junction, ring without the finger', () => {
+      const r = spliceNub(nubLoop(), START);
+      assert(r.nubKm > 7, `nubKm ≈ 8 expected, got ${r.nubKm}`);
+      const j = r.coords[r.junctionIdx];
+      // The run boundary may include the fork itself; the junction must sit
+      // within one grid step of it. coords are [lon, lat] arrays.
+      const jx = xKm(j), jy = yKm(j);
+      assert(near(jx, 4, 0.25) && near(jy, 10, 0.25),
+        `junction at the fork (4,10) expected, got (${jx.toFixed(2)}, ${jy.toFixed(2)})`);
+      const km = (coords) => {
+        let s = 0;
+        for (let i = 1; i < coords.length; i++) {
+          s += Math.hypot(
+            (coords[i][0] - coords[i - 1][0]) * KM_PER_DEG_LAT * Math.cos((LAT0 * Math.PI) / 180),
+            (coords[i][1] - coords[i - 1][1]) * KM_PER_DEG_LAT,
+          );
+        }
+        return s;
+      };
+      assert(near(km(r.coords), km(nubLoop()) - r.nubKm, 0.3),
+        `ring must be probe minus nub, got ${km(r.coords).toFixed(2)} vs ${(km(nubLoop()) - r.nubKm).toFixed(2)}`);
+      assert(nubRuns(r.coords, START).length === 0, 'spliced ring must have no twin strands');
+    });
+
+    // ---- ringVias ----
+
+    test('ringVias: pins every ~step km, all on the ring, none in the ends', () => {
+      const coords = uLoop();
+      const vias = ringVias(coords, START, 1.8);
+      assert(vias.length >= 25 && vias.length <= 35,
+        `~(56-2×1.8)/1.8 ≈ 29 vias expected, got ${vias.length}`);
+      // Every via must sit ON a ring point (engine-ridden geometry, no floats).
+      const onRing = vias.every((v) => coords.some(
+        (c) => near(xKm(c), xKm([v.lon, v.lat]), 1e-9) && near(yKm(c), yKm([v.lon, v.lat]), 1e-9),
+      ));
+      assert(onRing, 'every via must be a cut of the ring geometry');
+      // Ends: nothing within 1.8 km of path from S.
+      const viasNearStart = vias.filter((v) => {
+        const x = xKm([v.lon, v.lat]), y = yKm([v.lon, v.lat]);
+        return Math.hypot(x, y) < 1.8 - 0.05;
+      });
+      assert(viasNearStart.length === 0, 'no via inside the start approach zone');
+    });
+
+    test('ringVias: empty ring → no vias', () => {
+      assert(ringVias([], START).length === 0, 'empty ring must give no vias');
+    });
+
+    // ---- interiorDoubledKm ----
+
+    test('interiorDoubledKm: clean 0, spike ≈ its run', () => {
+      assert(interiorDoubledKm(uLoop(), START) === 0, 'clean loop must report 0');
+      const d = interiorDoubledKm(spike(), START);
+      assert(near(d, 15, 0.6), `spike ≈ 15 expected, got ${d}`);
+    });
+
+    test('interiorDoubledKm: short out-and-back V (Δpath < 1 km) is caught', () => {
+      // Delivery measured at the B-via failure: the ride enters a dead-end
+      // street (x=3.7), turns at its end, returns the SAME strand — up+down
+      // passes sit < 1 km of path apart at the base, so the twin window
+      // (≥ 1 km) alone cannot see it; the spike probe must.
+      const coords = [];
+      for (let x = 0.1; x <= 3.7; x += 0.1) coords.push([kmToLon(x), kmToLat(10)]);
+      for (let y = 10.1; y <= 12; y += 0.1) coords.push([kmToLon(3.7), kmToLat(y)]);
+      for (let y = 11.9; y >= 10; y -= 0.1) coords.push([kmToLon(3.7), kmToLat(y)]);
+      for (let x = 3.6; x >= 0; x -= 0.1) coords.push([kmToLon(x), kmToLat(10)]);
+      const d = interiorDoubledKm(coords, START);
+      // The fixture is essentially all-V (its approaches twin too), so the
+      // caught run exceeds the bare strand — the point is: it IS caught.
+      assert(d > 1, `short V must be caught, got ${d}`);
+    });
+
+    // ---- stubVias ----
+
+    test('stubVias: via on a dead-end tip is flagged, corridor vias are kept', () => {
+      // Ring: east along y=10, with a 1.2 km dead-end branch at x=6 (up and
+      // back the same strand), then south and home. A via pinned at the
+      // branch tip (6,12) must be flagged; a via mid-corridor must not.
+      const coords = [];
+      for (let x = 0.1; x <= 10; x += 0.1) coords.push([kmToLon(x), kmToLat(10)]);
+      for (let y = 10.1; y <= 12; y += 0.1) coords.push([kmToLon(6), kmToLat(y)]);
+      for (let y = 11.9; y >= 10; y -= 0.1) coords.push([kmToLon(6), kmToLat(y)]);
+      for (let y = 9.9; y >= 0; y -= 0.1) coords.push([kmToLon(10), kmToLat(y)]);
+      for (let x = 9.9; x >= 0; x -= 0.1) coords.push([kmToLon(x), kmToLat(0)]);
+      const tipVia = { lon: kmToLon(6), lat: kmToLat(12) };
+      const corridorVia = { lon: kmToLon(3), lat: kmToLat(10) };
+      const stubs = stubVias(coords, [corridorVia, tipVia], START);
+      assert(JSON.stringify(stubs) === '[1]', `expected only the tip via flagged, got ${JSON.stringify(stubs)}`);
+    });
+
+    test('stubVias: no stubs on a clean ring delivery', () => {
+      const coords = uLoop();
+      const vias = ringVias(coords, START, 1.8);
+      assert(stubVias(coords, vias, START).length === 0, 'clean ring must have no stubs');
+    });
+
+    // ---- parseVisitedPolygons / pointInRing / isVisited ----
+
+    // A4.2 fixture: one polygon, outer 2×2 square, hole 1×1 in the middle.
+    const trophy = {
+      type: 'FeatureCollection',
+      features: [
+        { properties: { name: 'squadrats-outline' }, geometry: { type: 'MultiLineString', coordinates: [] } },
+        {
+          properties: { name: 'squadrats', size: 9 },
+          geometry: {
+            type: 'MultiPolygon',
+            coordinates: [[
+              [[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]],
+              [[0.5, 0.5], [1.5, 0.5], [1.5, 1.5], [0.5, 1.5], [0.5, 0.5]],
+            ]],
+          },
+        },
+      ],
+    };
+
+    test('parseVisitedPolygons: squadrats feature → outer + holes, declaredSize', () => {
+      const r = parseVisitedPolygons(trophy);
+      assert(r && r.declaredSize === 9, `declaredSize 9 expected, got ${r?.declaredSize}`);
+      assert(r.polygons.length === 1, `1 polygon expected, got ${r.polygons.length}`);
+      assert(r.polygons[0].outer.length === 5 && r.polygons[0].holes.length === 1,
+        'outer ring + 1 hole expected');
+    });
+
+    test('parseVisitedPolygons: missing squadrats feature → null', () => {
+      assert(parseVisitedPolygons({ features: [] }) === null, 'empty FC must give null');
+      assert(parseVisitedPolygons(null) === null, 'null must give null');
+    });
+
+    test('pointInRing: inside / outside / hole', () => {
+      const ring = [[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]];
+      assert(pointInRing([1, 1], ring), 'center must be inside');
+      assert(!pointInRing([3, 1], ring), 'outside must be outside');
+      assert(!pointInRing([1, 3], ring), 'above must be outside');
+    });
+
+    test('isVisited: outer true, hole false, outside false', () => {
+      const { polygons } = parseVisitedPolygons(trophy);
+      assert(isVisited(polygons, 0.25, 0.25), 'inside outer, outside hole → visited');
+      assert(!isVisited(polygons, 1, 1), 'inside the hole → not visited');
+      assert(!isVisited(polygons, 5, 5), 'far outside → not visited');
+    });
+
+    // ---- countNewCells (planner's own grid, A4.4) ----
+
+    // Fixture lives ON the real grid: cell (i0, 8192) — merc row of lat 0;
+    // its box [lon0, −DLON°]→[lon0+DLON, 0] matches the mercator row bounds
+    // to <1e-6° at the equator, so cells map 1:1 to squares.
+    const lon0 = -180 + Math.floor(180 / DLON) * DLON;
+    const visitedCellFC = {
+      type: 'FeatureCollection',
+      features: [{
+        properties: { name: 'squadrats', size: 1 },
+        geometry: { type: 'MultiPolygon', coordinates: [[[
+          [lon0, -DLON], [lon0 + DLON, -DLON], [lon0 + DLON, 0], [lon0, 0], [lon0, -DLON],
+        ]]] },
+      }],
+    };
+
+    test('countNewCells: visited / fresh / touched split on the real grid', () => {
+      const { polygons } = parseVisitedPolygons(visitedCellFC);
+      const trackIn = [
+        [lon0 + 0.5 * DLON, -0.5 * DLON], // inside the visited cell
+        [lon0 + 0.5 * DLON, 0.5 * DLON],  // one cell north → fresh
+        [lon0 + 1.5 * DLON, -0.5 * DLON], // one cell east → fresh
+      ];
+      const r = countNewCells(trackIn, polygons);
+      assert(r.touched === 3, `3 touched expected, got ${r.touched}`);
+      assert(r.visited === 1, `1 re-visited expected, got ${r.visited}`);
+      assert(r.fresh === 2, `2 fresh expected, got ${r.fresh}`);
+    });
+
+    test('countNewCells: many points in one fresh cell count once', () => {
+      const { polygons } = parseVisitedPolygons(visitedCellFC);
+      // Three points in ONE unvisited cell (east neighbour) → 1 fresh, 0 visited.
+      const trackSame = [
+        [lon0 + 1.2 * DLON, -0.5 * DLON],
+        [lon0 + 1.5 * DLON, -0.5 * DLON],
+        [lon0 + 1.8 * DLON, -0.5 * DLON],
+      ];
+      const r = countNewCells(trackSame, polygons);
+      assert(r.touched === 1 && r.fresh === 1 && r.visited === 0,
+        `1/1/0 expected, got ${JSON.stringify(r)}`);
+    });
+
+    test('countNewCells: coarse visited but fine-grid (squadratinhos) fresh', () => {
+      // Same corner cell: visited on the coarse union, a hole on the fine one.
+      // A track through it is re-visited for squadrats yet fresh for inhos.
+      const fine = DLON / 8; // squadratinhos cell ≈ 1/8 of the coarse side
+      const fineFC = {
+        type: 'FeatureCollection',
+        features: [{
+          properties: { name: 'squadratinhos', size: 8 },
+          geometry: { type: 'MultiPolygon', coordinates: [[[
+            [lon0 + 2 * fine, -2 * fine], [lon0 + DLON, -2 * fine],
+            [lon0 + DLON, DLON - 2 * fine], [lon0 + 2 * fine, DLON - 2 * fine],
+            [lon0 + 2 * fine, -2 * fine],
+          ]]] },
+        }],
+      };
+      const inho = parseVisitedPolygons(fineFC, 'squadratinhos').polygons;
+      const track = [[lon0 + 0.5 * DLON, -0.5 * DLON]]; // inside the hole → fresh inho
+      const r = countNewCells(track, inho);
+      assert(r.fresh === 1 && r.visited === 0, `inho fresh=1 expected, got ${JSON.stringify(r)}`);
+    });
+
+    // ---- geometry: cellCenter / bearingDeg / frontier (Etap B) ----
+
+    test('cellCenter: cellIndex(cellCenter) roundtrip on arbitrary coords', () => {
+      const { i, j } = cellIndex(16.0, 52.0);
+      const c = cellCenter(i, j);
+      const back = cellIndex(c.lon, c.lat);
+      assert(back.i === i && back.j === j, `roundtrip failed: ${back.i}:${back.j} vs ${i}:${j}`);
+    });
+
+    test('bearingDeg: N 0, E 90, W −90, S ±180', () => {
+      const o = { lon: 0, lat: 0 };
+      assert(gridBearingDeg(o, { lon: 0, lat: 0.01 }) === 0, 'N must be 0');
+      assert(gridBearingDeg(o, { lon: 0.01, lat: 0 }) === 90, 'E must be 90');
+      assert(gridBearingDeg(o, { lon: -0.01, lat: 0 }) === -90, 'W must be −90');
+      assert(Math.abs(gridBearingDeg(o, { lon: 0, lat: -0.01 })) === 180, 'S must be ±180');
+    });
+
+    test('visitedCellsInBbox + computeFrontier: 1 visited cell → 4 frontier cells', () => {
+      const { polygons } = parseVisitedPolygons(visitedCellFC);
+      const bbox = { w: -0.02, s: -0.05, e: 0.05, n: 0.02 };
+      const visited = visitedCellsInBbox(polygons, bbox);
+      assert(visited.size === 1 && visited.has('8192:8192'),
+        `exactly the fixture cell expected, got ${[...visited].join(',')}`);
+      const fr = computeFrontier(visited, bbox);
+      assert(fr.size === 4, `4 frontier cells expected, got ${fr.size}`);
+      for (const k of ['8193:8192', '8191:8192', '8192:8193', '8192:8191']) {
+        assert(fr.has(k), `frontier must hold ${k}`);
+      }
+    });
+
+    test('aimAtFrontier: start at the east side of the visited cell → bearing ≈ 90', () => {
+      const { polygons } = parseVisitedPolygons(visitedCellFC);
+      const start = { lon: DLON / 2 + 0.004, lat: -DLON / 2 };
+      const aim = aimAtFrontier(start, polygons, 50);
+      assert(aim, 'aim expected with squares loaded');
+      assert(Math.abs(aim.bearingDeg - 90) < 1, `bearing ≈90 expected, got ${aim.bearingDeg}`);
+      assert(Math.abs(aim.dKm - 2.0) < 0.4, `frontier ≈2 km expected, got ${aim.dKm}`);
+    });
+
+    test('aimAtFrontier: no visited cells in reach → null (manual fallback)', () => {
+      const start = { lon: 16.0, lat: 52.0 }; // fixture cell is at (0,0) — far away
+      assert(aimAtFrontier(start, parseVisitedPolygons(visitedCellFC).polygons, 50) === null,
+        'no frontier in reach must give null');
+    });
+
+    test('aimAtFrontier: sector E keeps the east frontier, sector W flips to west', () => {
+      const { polygons } = parseVisitedPolygons(visitedCellFC);
+      const start = { lon: DLON / 2 + 0.004, lat: -DLON / 2 };
+      const east = aimAtFrontier(start, polygons, 50, 90);
+      assert(east && Math.abs(east.bearingDeg - 90) < 1, `sector E → bearing ≈90, got ${east?.bearingDeg}`);
+      const west = aimAtFrontier(start, polygons, 50, 270);
+      assert(west && Math.abs(west.bearingDeg - 270) < 1,
+        `sector W must aim west (constraint, not global nearest), got ${west?.bearingDeg}`);
+    });
+
+    test('frontierAnchors: sector W anchors at the west frontier cell', () => {
+      const { polygons } = parseVisitedPolygons(visitedCellFC);
+      const start = { lon: DLON / 2 + 0.004, lat: -DLON / 2 };
+      const fa = frontierAnchors(start, polygons, 50, 270);
+      assert(fa, 'sector aim expected');
+      const f = cellCenter(8191, 8192); // west-neighbour frontier cell
+      assert(Math.abs(fa.anchors[0].lon - f.lon) < 1e-9 && Math.abs(fa.anchors[0].lat - f.lat) < 1e-9,
+        'A₀ must be the WEST frontier cell center');
+    });
+
+    test('frontierAnchors: A₀ at the frontier cell, B₀ deeper along the bearing', () => {
+      const { polygons } = parseVisitedPolygons(visitedCellFC);
+      const start = { lon: DLON / 2 + 0.004, lat: -DLON / 2 };
+      const fa = frontierAnchors(start, polygons, 50);
+      assert(fa && fa.anchors.length === 2, 'two anchors expected');
+      const [a0, b0] = fa.anchors;
+      const f = cellCenter(8193, 8192); // east-neighbour frontier cell
+      assert(Math.abs(a0.lon - f.lon) < 1e-9 && Math.abs(a0.lat - f.lat) < 1e-9,
+        'A₀ must be the frontier cell center');
+      assert(Math.abs(gridBearingDeg(start, a0) - 90) < 1, 'frontier sits east');
+      const dKmB0 = (b0.lon - a0.lon) * 111.32; // bearing 90° → pure lon step
+      assert(Math.abs(dKmB0 - fa.chordKm) < 0.2, `B₀ ≈ chord ${fa.chordKm} km, got ${dKmB0.toFixed(2)}`);
+      assert(fa.chordKm > 5, 'chord for D=50 must exceed the 5 km tip minimum');
+    });
+
+    const list = document.getElementById('results');
+    for (const r of results) {
+      const li = document.createElement('li');
+      li.className = r.ok ? 'pass' : 'fail';
+      li.textContent = (r.ok ? '✓ ' : '✗ ') + r.name + (r.ok ? '' : ` — ${r.msg}`);
+      list.appendChild(li);
+    }
+    const passed = results.filter((r) => r.ok).length;
+    const summary = document.getElementById('summary');
+    summary.textContent = `${passed}/${results.length} passed`;
+    summary.className = passed === results.length ? 'pass' : 'fail';
+  </script>
+</body>
+</html>
