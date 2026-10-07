@@ -12,14 +12,14 @@ export class ConfigError extends Error {
   }
 }
 
-// Template shown in the textarea until a real config is saved (dummy coordinates).
+// Template shown in the textarea until a real config is saved (public POI + dummy coords).
 export const EXAMPLE_YAML = [
   '#squares_uid: your-squadrats-uid  # optional — prefills the Squadrats uid',
   'pois:',
-  '  poi1:',
-  '    label: Home',
-  '    lon: 16.0',
-  '    lat: 52.0',
+  '  plac_wolnosci:',
+  '    label: Plac Wolności',
+  '    lon: 16.9190',
+  '    lat: 52.4080',
   '  poi2:',
   '    label: Work',
   '    lon: 16.1',
