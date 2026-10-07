@@ -5,7 +5,7 @@ Gravel route planning from a requested distance D, with GPX export (stages A–D
 ## Structure
 
 ```
-├── index.html          # form: D [km] + start (from config) + bearing (auto = frontier-aimed); uid + Fetch squares; Configuration (YAML); status line
+├── index.html          # form: D [km] + start (from config) + bearing (auto = frontier-aimed); uid + Fetch squares; Configuration (point list mirroring YAML); status line
 ├── AGENTS.md           # rules for AI assistants
 ├── README.md
 ├── CHAT_PLANNER.md     # atomic instruction v6.1 — source spec
@@ -41,28 +41,31 @@ imports (measured: "does not provide an export named 'cellCenter'").
 ## Configuration (private)
 
 Start points (home, work, …) are **not in the repo** — the app is public and
-the coordinates must stay private. Paste them once in the app: **Configuration
-→ start points (YAML)** at the bottom of the page, then **Save config**. The
-blob lives only in this browser's localStorage (`gravel-planner:config`); each
-device/browser needs its own paste. Format (standard YAML via the `yaml`
-package, importmap/esm.sh like the other deps; `#` comments; the key is the
-start id, `label` shows in the select; optional top-level `squares_uid`
-prefills the Squadrats uid):
+the coordinates must stay private. Edit them in the app: **Configuration →
+start points** at the bottom of the page. The form is the editor: add/remove
+points, drag ⠿ to reorder (the order is kept), uncheck a point to keep it in
+the config but exclude it from planning, and fill coordinates by typing
+`lon, lat` (a pasted Google-style `lat, lon` pair is auto-detected) or picking
+them on the map (📍). Every change mirrors the YAML below the form and
+auto-saves to this browser's localStorage (`gravel-planner:config`); each
+device/browser needs its own setup. The YAML is the interchange format —
+paste it on another device and use **Apply YAML** (a legacy `name:` mapping
+loads too). Format (standard YAML via the `yaml` package, importmap/esm.sh
+like the other deps; `#` comments):
 
 ```yaml
 squares_uid: your-squadrats-uid   # optional — prefills the Squadrats uid
 pois:
-  dom:
-    label: Home
-    lon: 16.0   # decimal degrees, -180..180
-    lat: 52.0   # decimal degrees, -90..90
-  praca:
-    label: Work
+  - label: Plac Wolności
+    lon: 16.9190   # decimal degrees, -180..180
+    lat: 52.4080   # decimal degrees, -90..90
+  - label: Work
     lon: 16.1
     lat: 52.1
+    enabled: false  # unchecked: kept in the config, ignored by planning
 ```
 
-Without a saved config the planner stays disabled and asks for the paste.
+Without a saved config the planner stays disabled and asks for a start point.
 The Squadrats uid is per-browser too: typed in the form or taken once from
 `squares_uid` (clearing the field then sticks — no account id in the repo).
 

@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>planner — squares map (dev)</title>
-  <!-- Dev-only diagnostic: same trophy data the Squadrats extension draws on
-       bikerouter (this embedded Chromium cannot install extensions). -->
+  <title>planner — squares map (dev)</title>    <!-- Dev-only diagnostic: same trophy data the Squadrats extension draws on
+         bikerouter (this embedded Chromium cannot install extensions).
+         Also a coordinate picker for the config form: map.html?pick=<id> -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
@@ -217,14 +217,32 @@
     const routeUrl = [decoded, raw].find((s) => s.includes('lonlats=')) ?? '';
     if (routeUrl) document.getElementById('url').value = routeUrl;
 
-    (async () => {
-      info('loading trophy…');
-      await loadTrophy();
-      info(`trophy ${trophy.timestamp ? new Date(trophy.timestamp).toLocaleDateString('pl-PL') : '?'} · ${trophy.sq.declaredSize} sq · ${trophy.st?.declaredSize ?? '?'} inh`);
-      renderUnions();
-      renderFrontier();
-      if (routeUrl) await drawRoute(routeUrl);
-    })().catch((err) => info(`error: ${err.message}`));
+    // Pick mode (opened by the config form's 📍 button): no trophy loading —
+    // a map click reports coordinates back to the opener form (same-origin
+    // postMessage); the marker follows each click.
+    const pickId = new URLSearchParams(location.search).get('pick');
+    if (pickId) {
+      let marker = null;
+      info('pick: click the map — coordinates go to the form');
+      map.on('click', (e) => {
+        if (marker) marker.setLatLng(e.latlng);
+        else marker = L.marker(e.latlng).addTo(map);
+        window.opener?.postMessage(
+          { type: 'poi-pick', id: pickId, lon: e.latlng.lng, lat: e.latlng.lat },
+          location.origin,
+        );
+        info(`picked ${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)} — sent to the form`);
+      });
+    } else {
+      (async () => {
+        info('loading trophy…');
+        await loadTrophy();
+        info(`trophy ${trophy.timestamp ? new Date(trophy.timestamp).toLocaleDateString('pl-PL') : '?'} · ${trophy.sq.declaredSize} sq · ${trophy.st?.declaredSize ?? '?'} inh`);
+        renderUnions();
+        renderFrontier();
+        if (routeUrl) await drawRoute(routeUrl);
+      })().catch((err) => info(`error: ${err.message}`));
+    }
   </script>
 </body>
 </html>

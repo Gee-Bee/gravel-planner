@@ -14,6 +14,10 @@
     #summary.pass { color: #2a9d8f; }
     #summary.fail { color: #e63946; }
   </style>
+  <!-- src/config.js imports 'yaml' (bare specifier) — same map as index.html -->
+  <script type="importmap">
+    { "imports": { "yaml": "https://esm.sh/yaml@2.9.1" } }
+  </script>
 </head>
 <body>
   <h1>planner v7.1 (nubRuns / spliceNub / ringVias / squares parse) — static tests</h1>
@@ -43,6 +47,7 @@
     } from './src/geometry.js';
     import { aimAtFrontier, frontierAnchors } from './src/planner.js';
     import { DLON } from './src/constants.js';
+    import { parseConfigYaml, serializeConfigYaml, parseCoordsText } from './src/config.js';
 
     const KM_PER_DEG_LAT = 111.32;
     const LAT0 = 52.5;
@@ -407,6 +412,75 @@
       const dKmB0 = (b0.lon - a0.lon) * 111.32; // bearing 90° → pure lon step
       assert(Math.abs(dKmB0 - fa.chordKm) < 0.2, `B₀ ≈ chord ${fa.chordKm} km, got ${dKmB0.toFixed(2)}`);
       assert(fa.chordKm > 5, 'chord for D=50 must exceed the 5 km tip minimum');
+    });
+
+    // ---- config: pois list (the form's YAML mirror) ----
+
+    test('parseConfigYaml: pois list → ordered starts, enabled default true', () => {
+      const { starts, uid } = parseConfigYaml([
+        'squares_uid: abc123',
+        'pois:',
+        '  - label: Dom',
+        '    lon: 16.0',
+        '    lat: 52.0',
+        '  - label: Praca',
+        '    lon: 16.1',
+        '    lat: 52.1',
+        '    enabled: false',
+      ].join('\n'));
+      assert(uid === 'abc123', `uid expected, got ${uid}`);
+      assert(starts.length === 2, `2 points expected, got ${starts.length}`);
+      assert(starts[0].label === 'Dom' && starts[0].lon === 16 && starts[0].lat === 52 && starts[0].enabled === true,
+        `point 0 mismatch: ${JSON.stringify(starts[0])}`);
+      assert(starts[1].enabled === false, 'point 1 must be disabled');
+    });
+
+    test('parseConfigYaml: legacy name: mapping still loads (order kept, all enabled)', () => {
+      const { starts } = parseConfigYaml('pois:\n  dom:\n    label: Home\n    lon: 16.0\n    lat: 52.0\n  praca:\n    lon: 16.1\n    lat: 52.1');
+      assert(starts.length === 2, `2 points expected, got ${starts.length}`);
+      assert(starts[0].label === 'Home' && starts[0].enabled === true, 'legacy key + explicit label expected');
+      assert(starts[1].label === 'praca' && starts[1].lon === 16.1, 'legacy key doubles as the label');
+    });
+
+    test('parseConfigYaml: bad shapes rejected with a clear target', () => {
+      const boom = (yaml) => {
+        try { parseConfigYaml(yaml); return 'no error'; } catch (e) { return e.message; }
+      };
+      assert(boom('pois:\n  - label: X\n    lat: 52.0').includes('pois[0]'), 'missing lon must point at pois[0]');
+      assert(boom('pois:\n  - label: X\n    lon: 16.0\n    lat: 52.0\n    enabled: maybe').includes('enabled'),
+        'non-boolean enabled must be rejected');
+      assert(boom('pois: 5').includes('list'), 'scalar pois must be rejected');
+      assert(boom('foo: 1').includes('unknown top-level key'), 'unknown key must stay rejected');
+      assert(parseConfigYaml('').starts.length === 0, 'empty config → no starts');
+    });
+
+    test('serializeConfigYaml → parseConfigYaml round-trips points + uid', () => {
+      const pts = [
+        { label: 'Dom', lon: 16.919, lat: 52.408, enabled: true },
+        { label: '', lon: 16.1, lat: 52.1, enabled: false },
+      ];
+      const { starts, uid } = parseConfigYaml(serializeConfigYaml({ uid: 'u1', points: pts }));
+      assert(uid === 'u1', 'uid round-trip');
+      assert(starts.length === 2 && starts[0].label === 'Dom' && starts[0].lon === 16.919,
+        `point 0 round-trip: ${JSON.stringify(starts[0])}`);
+      assert(starts[1].label === 'Punkt 2' && starts[1].enabled === false, 'empty label defaults, disabled kept');
+    });
+
+    test('serializeConfigYaml: omits squares_uid/enabled when default', () => {
+      const yaml = serializeConfigYaml({ uid: '', points: [{ label: 'A', lon: 1, lat: 2, enabled: true }] });
+      assert(!yaml.includes('squares_uid'), 'no uid → no squares_uid key');
+      assert(!yaml.includes('enabled'), 'enabled true stays implicit');
+    });
+
+    test('parseCoordsText: lon,lat kept, Google lat,lon swapped, garbage null', () => {
+      assert(JSON.stringify(parseCoordsText('16.9190, 52.4080')) === '{"lon":16.919,"lat":52.408}', 'lon,lat order kept');
+      const swapped = parseCoordsText('52.4080, 16.9190');
+      assert(swapped && swapped.lon === 16.919 && swapped.lat === 52.408, 'pasted lat,lon is auto-swapped');
+      assert(JSON.stringify(parseCoordsText('16.1;52.1')) === '{"lon":16.1,"lat":52.1}', '; separator works');
+      assert(parseCoordsText('nonsense') === null, 'garbage → null');
+      assert(parseCoordsText('300, 52') === null, 'lon out of range → null');
+      assert(parseCoordsText('16, 200') === null, 'swapped lon out of range → null');
+      assert(parseCoordsText('16.0') === null, 'single value → null');
     });
 
     const list = document.getElementById('results');

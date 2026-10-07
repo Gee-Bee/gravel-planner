@@ -76,6 +76,35 @@
     details.config summary { font-size: 0.8rem; font-weight: 600; color: var(--muted); cursor: pointer; }
     details.config .hint { font-size: 0.75rem; color: var(--muted); margin: 0.6rem 0 0; }
     details.config .hint code { background: var(--bg); padding: 0 0.25rem; border-radius: 4px; }
+    #pois-editor { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.6rem; }
+    .poi-row {
+      display: flex; gap: 0.35rem; align-items: center;
+      background: var(--bg); border: 1px solid #ddd; border-radius: var(--radius);
+      padding: 0.3rem 0.4rem;
+    }
+    .poi-row.dragging { opacity: 0.35; }
+    .poi-row.off { opacity: 0.5; }
+    .poi-drag {
+      flex: none; border: none; background: none; color: var(--muted);
+      font-size: 1rem; cursor: grab; padding: 0 0.15rem; user-select: none;
+    }
+    .poi-row input[type="text"] {
+      flex: 1; min-width: 0; padding: 0.3rem 0.35rem; font-size: 0.85rem;
+      border: 1px solid #ccc; border-radius: 6px; background: #fff; color: var(--text);
+    }
+    .poi-coords { flex: 1.2; font: 0.78rem/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .poi-coords.bad { border-color: var(--danger); }
+    .poi-pick, .poi-remove {
+      flex: none; padding: 0.28rem 0.4rem; font-size: 0.78rem; line-height: 1;
+      background: #fff; border: 1px solid #ccc; border-radius: 6px; cursor: pointer; color: var(--text);
+    }
+    .poi-remove { color: var(--danger); }
+    #add-poi {
+      margin-top: 0.5rem; width: 100%; padding: 0.45rem; font-size: 0.8rem; font-weight: 600;
+      background: #fff; color: var(--primary); border: 1px dashed var(--primary);
+      border-radius: var(--radius); cursor: pointer;
+    }
+    #add-poi:hover { background: var(--primary); color: #fff; }
     #config-yaml {
       width: 100%; margin-top: 0.5rem; padding: 0.5rem;
       font: 0.78rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -145,10 +174,22 @@
     <div id="status"></div>
 
     <details id="config-details" class="config">
-      <summary>Configuration — start points (YAML, saved in this browser)</summary>
-      <p class="hint">Private start points are stored only in this browser (localStorage), never in the repo. All points live under the top-level <code>pois:</code> key — one <code>name:</code> block each with <code>label</code>, <code>lon</code>, <code>lat</code> (decimal degrees). Optional top-level <code>squares_uid</code> prefills the Squadrats uid.</p>
-      <textarea id="config-yaml" rows="10" spellcheck="false" aria-label="Start points YAML"></textarea>
-      <button type="button" id="save-config">Save config</button>
+      <summary>Configuration — start points (form + YAML, saved in this browser)</summary>
+      <p class="hint">Private start points live only in this browser (localStorage), never in the repo. Edit the list: add/remove, drag ⠿ to reorder (order is kept), uncheck to keep a point out of planning; type <code>lon, lat</code> (a pasted <code>lat, lon</code> is auto-detected) or pick 📍 on the map. The YAML below mirrors the form and auto-saves; hand-edited YAML applies with <b>Apply YAML</b>. Format: top-level <code>pois:</code> list of <code>label/lon/lat</code> (+ optional <code>enabled: false</code>); optional <code>squares_uid</code> prefills the uid; a legacy <code>name:</code> mapping still loads.</p>
+      <template id="poi-row-tpl">
+        <div class="poi-row">
+          <button type="button" class="poi-drag" draggable="false" title="Drag to reorder — the order is kept in the YAML">⠿</button>
+          <input type="checkbox" class="poi-enabled" checked title="Checked = used for planning; unchecked = kept in the config only" />
+          <input type="text" class="poi-label" placeholder="label" maxlength="60" />
+          <input type="text" class="poi-coords" placeholder="lon, lat" spellcheck="false" title="Decimal degrees, lon first — a pasted lat, lon pair is auto-detected" />
+          <button type="button" class="poi-pick" title="Pick the coordinates on the map">📍</button>
+          <button type="button" class="poi-remove" title="Remove this point">✕</button>
+        </div>
+      </template>
+      <div id="pois-editor" aria-label="Start points list"></div>
+      <button type="button" id="add-poi">+ Add point</button>
+      <textarea id="config-yaml" rows="10" spellcheck="false" aria-label="Start points YAML (mirrors the form)"></textarea>
+      <button type="button" id="save-config">Apply YAML</button>
       <div id="config-status"></div>
     </details>
   </main>
