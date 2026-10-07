@@ -12,8 +12,8 @@ export const SQUADRATS_API = 'https://mainframe-api.squadrats.com/anonymous/squa
 export const GRID_N = 16384;
 export const DLON = 360 / GRID_N; // 0.02197265625°
 
-// B1.4 — backend serves stock "gravel"; the 4 flags always explicit in the URL
-// (no saved my-gravel; riding profile lives outside the planner, B5).
+// B1.4 — stock "gravel" is the FALLBACK when the riding-profile upload (B5,
+// src/profile.js) fails; the flags stay explicit in every routing URL.
 export const PROFILE = 'gravel';
 export const PROFILE_PARAMS = Object.freeze({
   'profile:prefer_unpaved_paths': '1',

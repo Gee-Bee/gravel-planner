@@ -10,6 +10,8 @@ import { planRoutes } from './planner.js';
 import { fetchSquadratsGeojson } from './api/squadrats.js';
 import { parseVisitedPolygons } from './squares.js';
 import { loadUid, saveUid } from './storage.js';
+import { getRidingProfileId } from './profile.js';
+import { PROFILE } from './constants.js';
 import {
   EXAMPLE_YAML,
   getConfig,
@@ -335,7 +337,18 @@ form.addEventListener('submit', async (e) => {
   setStatus('Planning…');
   planBtn.disabled = true;
   try {
-    const result = await planRoutes({ targetKm, start, bearingKey, squares: { ...squaresState } });
+    // B5: plan with the riding profile (the delta .brf uploaded to brouter.de
+    // per session) so the pinned delivery matches what my-gravel rides;
+    // stock gravel is the explicit fallback.
+    let profile = PROFILE;
+    let profileNote = 'profile gravel (stock fallback)';
+    try {
+      profile = await getRidingProfileId();
+      profileNote = 'profile my-gravel';
+    } catch (err) {
+      console.error(err);
+    }
+    const result = await planRoutes({ targetKm, start, bearingKey, profile, squares: { ...squaresState } });
     if (result.degenerate) {
       const why = result.collapsedKm != null
         ? `probe collapsed to a ${result.collapsedKm} km ring (mostly out-and-back) — pick another bearing`
@@ -354,6 +367,7 @@ form.addEventListener('submit', async (e) => {
       nubKm > 0 ? `finger ${nubKm} km spliced` : 'clean probe',
       result.doubledKm > 0 ? `${result.doubledKm} km dead-end doubling kept` : null,
       `${viaCount} ring vias`,
+      profileNote,
       bearing != null ? `bearing ${bearing}°${bearingDeviation ? ` (${bearingDeviation > 0 ? '+' : ''}${bearingDeviation}° retry)` : ''}` : null,
       aimedKm != null ? `frontier ${aimedKm} km` : null,
       cells

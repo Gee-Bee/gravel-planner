@@ -11,6 +11,7 @@
 // doubled strands or gross length drift before the route is handed out.
 
 import { LOOP_TIP_KM, ROAD_INFLATION, planAnchorsRadial } from './planning.js';
+import { PROFILE } from './constants.js';
 import {
   bboxAroundKm,
   bearingDeg,
@@ -291,6 +292,10 @@ export function frontierAnchors(start, polygons, targetKm, sector = null) {
 export async function planRoutes(params) {
   const start = params.start;
   if (!start) throw new Error('no start — save the config YAML first');
+  // B5: the riding profile (uploaded .brf) decides the roads — probe, ring and
+  // delivery all optimize with the SAME cost function the user rides with;
+  // stock gravel is only the upload-failure fallback.
+  const profile = params.profile ?? PROFILE;
   const trackname = `gravel-D${params.targetKm}`;
   // A bearing (auto or manual) aims at the NEAREST frontier cell — auto in
   // the full circle, manual inside its ±45° quadrant; no squares → aim null
@@ -315,7 +320,7 @@ export async function planRoutes(params) {
   // ×1.14: the nub grows faster than the ring and a second nub appears).
   const probeBearing = async (brg, targets = null) => {
     const anchors = targets ?? planAnchorsRadial(start, brg, params.targetKm);
-    const probe = await fetchCounted([start, ...anchors, start], { plain: true });
+    const probe = await fetchCounted([start, ...anchors, start], { plain: true, profile });
     const probeCoords = extractCoords(probe.geojson);
     const ring = spliceNub(probeCoords, start);
     const { cum: ringCum } = planar(ring.coords, start);
@@ -371,13 +376,13 @@ export async function planRoutes(params) {
     // Delivery (plain = the preview engine's routing): verify no doubled
     // strands and ring parity; drop via stubs (dead-end tips) and retry once.
     let activeVias = pre.vias;
-    let delivery = await fetchCounted([start, ...activeVias, start], { plain: true });
+    let delivery = await fetchCounted([start, ...activeVias, start], { plain: true, profile });
     let deliveryCoords = extractCoords(delivery.geojson);
     let deliveryKm = trackLengthKm(delivery.geojson);
     const stubs = stubVias(deliveryCoords, activeVias, start, new Set());
     if (stubs.length > 0) {
       activeVias = pre.vias.filter((_, k) => !stubs.includes(k));
-      delivery = await fetchCounted([start, ...activeVias, start], { plain: true });
+      delivery = await fetchCounted([start, ...activeVias, start], { plain: true, profile });
       deliveryCoords = extractCoords(delivery.geojson);
       deliveryKm = trackLengthKm(delivery.geojson);
       if (stubVias(deliveryCoords, activeVias, start, new Set()).length > 0) {
@@ -395,7 +400,7 @@ export async function planRoutes(params) {
         doubledKm,
         driftKm,
         previewUrl: buildPreviewUrl([start, ...activeVias, start]),
-        b1Url: buildUrl([start, ...activeVias, start]),
+        b1Url: buildUrl([start, ...activeVias, start], { profile }),
       });
     }
 
@@ -427,7 +432,7 @@ export async function planRoutes(params) {
       previewUrl: buildPreviewUrl([start, ...activeVias, start]),
       // Backend link with the B1.4 flags — built, not fetched (the flagged
       // engine routes differently than the preview; verified on plain above).
-      b1Url: buildUrl([start, ...activeVias, start]),
+      b1Url: buildUrl([start, ...activeVias, start], { profile }),
     } };
   };
 

@@ -14,6 +14,7 @@ Gravel route planning from a requested distance D, with GPX export (stages A–D
 ├── src/
 │   ├── main.js         # entry: config bootstrap, form → planner, honest error reporting
 │   ├── planner.js      # v7.1: frontier-aimed bearing → loop probe (plain) → splice finger → ring vias → verify → new-squares estimate
+│   ├── profile.js      # B5 — riding profile upload (custom_<id> per session); stock gravel fallback
 │   ├── planning.js     # Etap C step 1 — radial lollipop anchors, A5.3/A5.5 spur snap
 │   ├── config.js       # private start points: 2-level YAML parser + localStorage (nothing private in the repo)
 │   ├── constants.js    # A4.1 Squadrats API, A4.3 grid, B1.4 profile
@@ -86,5 +87,6 @@ Pages serves modules with ~10 min caching — after a deploy, hard-refresh
 - **B** — visited cells (cell centers vs the visited union, local bbox around the start only) → frontier = unvisited cells 4-adjacent to visited ones (A4.6).
 - **C** — bearing at the NEAREST frontier cell (bearing "Auto (new squares)", default) → radial lollipop anchors ≈ D; manual N/E/S/W is a constraint, not an override — it aims at the nearest frontier within its ±45° quadrant (fallback: its own ±45° fan); without squares the algorithm runs the same, just ignores visits (auto → N, manual = plain direction fan).
 - **D** — BRouter GeoJSON (gravel + 4 flags in URL, B1.4; named via, B1.2) with the verify gate (no doubled strands, ring parity ≤3 km), bikerouter link; new-squares estimate from the delivery geometry on BOTH grids (cells touched where no point is visited).
+- **Riding profile (B5)** — the planner routes EVERY request (probe, ring, delivery) with the user's riding profile: `CHAT_BROUTER_PROFILE.md` (delta of quaelnix's gravel.brf — Antilights, NOBRUSH, level-crossing 150) is uploaded per session to brouter.de (`POST /brouter/profile` → `custom_<id>`, CORS-open) and passed as `profile=`. The via pins hold the ring shape (no U-turns), while the roads are picked by the SAME cost function the user rides with in bikerouter (my-gravel) — the preview recomputed with my-gravel lands on the verified roads. Upload failure → fallback to stock `gravel` + URL flags, reported in the route note.
 - HTTP 4xx/429/5xx → exact URL in the UI, no retry (§0.3).
 - **Dev map** (`map.html`) — the Squadrats browser extension cannot be installed in the embedded preview (UA-gated Web Store, no chrome://extensions), so this page replicates it: visited unions (both grids), frontier, and any bikerouter link pasted into the bar with fresh touched cells highlighted; reuses the app modules, so it shows exactly what the planner counts.
