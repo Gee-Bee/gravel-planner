@@ -368,7 +368,7 @@ export async function planRoutes(params) {
 
     if (pre.vias.length === 0) {
       return degenerate(pre, {
-        previewUrl: buildPreviewUrl([start, ...pre.anchors, start]),
+        previewUrl: buildPreviewUrl([start, ...pre.anchors, start], { profile }),
         b1Url: pre.probe.url,
       });
     }
@@ -388,7 +388,7 @@ export async function planRoutes(params) {
       if (stubVias(deliveryCoords, activeVias, start, new Set()).length > 0) {
         return degenerate(pre, {
           stubs: stubs.length,
-          previewUrl: buildPreviewUrl([start, ...activeVias, start]),
+          previewUrl: buildPreviewUrl([start, ...activeVias, start], { profile }),
           b1Url: delivery.url,
         });
       }
@@ -399,7 +399,7 @@ export async function planRoutes(params) {
       return degenerate(pre, {
         doubledKm,
         driftKm,
-        previewUrl: buildPreviewUrl([start, ...activeVias, start]),
+        previewUrl: buildPreviewUrl([start, ...activeVias, start], { profile }),
         b1Url: buildUrl([start, ...activeVias, start], { profile }),
       });
     }
@@ -429,7 +429,7 @@ export async function planRoutes(params) {
       cells,
       aimedKm: aim ? aim.dKm : null,
       bearingDeviation: aim ? Math.round(pre.brg - aim.bearingDeg) : null,
-      previewUrl: buildPreviewUrl([start, ...activeVias, start]),
+      previewUrl: buildPreviewUrl([start, ...activeVias, start], { profile }),
       // Backend link with the B1.4 flags — built, not fetched (the flagged
       // engine routes differently than the preview; verified on plain above).
       b1Url: buildUrl([start, ...activeVias, start], { profile }),

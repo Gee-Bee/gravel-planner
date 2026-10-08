@@ -3,7 +3,9 @@
 
 import { PROFILE, PROFILE_PARAMS } from '../constants.js';
 
-const BROUTER_BASE = 'https://brouter.de/brouter';
+// bikerouter's own engine — ONE backend for planning, the uploaded riding
+// profile (custom_ ids live HERE, see profile.js) and the preview link.
+const BROUTER_BASE = 'https://bikerouter.de/brouter-engine/brouter';
 
 /** Thrown for any HTTP 4xx/429/5xx; carries the exact URL for the UI (§0.3). */
 export class HttpError extends Error {
@@ -69,15 +71,25 @@ export function trackLengthKm(geojson) {
 }
 
 /**
- * B3 — preview link: ;-separated lonlats, /standard layer, profile=gravel
- * (without it bikerouter reuses the last profile — often road bike).
+ * B3 — preview link: ;-separated lonlats, /standard layer, profile + the two
+ * routing flags in the URL (bikerouter parses `profile:*` from the hash and
+ * forwards them to its engine — verified). opts.profile should be the custom
+ * id uploaded to bikerouter's own engine (see profile.js): the link then
+ * opens routed with the riding profile, no manual upload/selection; without
+ * it stock gravel is forced (bikerouter otherwise reuses the last profile —
+ * often road bike).
  */
 export function buildPreviewUrl(points, opts = {}) {
   const lonlats = points.map((p) => `${p.lon},${p.lat}`).join(';');
   const zoom = opts.zoom ?? 11;
   const first = points[0];
+  const params = new URLSearchParams({
+    profile: opts.profile ?? 'gravel',
+    'profile:prefer_unpaved_paths': '1',
+    'profile:avoid_noise': '1',
+  });
   return (
     `https://bikerouter.de/#map=${zoom}/${first.lat}/${first.lon}/standard` +
-    `&lonlats=${lonlats}&profile=${opts.profile ?? 'gravel'}`
+    `&lonlats=${lonlats}&${params.toString()}`
   );
 }
