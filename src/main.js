@@ -37,6 +37,11 @@ const fetchSquaresBtn = document.getElementById('fetch-squares');
 const squaresInfoEl = document.getElementById('squares-info');
 const routeInfoEl = document.getElementById('route-info');
 const targetKmEl = document.getElementById('target-km');
+const rangeEl = document.getElementById('target-km-range');
+const bearingAutoEl = document.getElementById('bearing-auto');
+const wheelEl = document.getElementById('bearing-wheel');
+const needleEl = document.getElementById('bearing-needle');
+const bearingDegEl = document.getElementById('bearing-deg');
 const reverseBtn = document.getElementById('route-reverse');
 const configDetailsEl = document.getElementById('config-details');
 const configYamlEl = document.getElementById('config-yaml');
@@ -130,8 +135,67 @@ function routeLabel(enabled) {
   return `${names.join(' → ')}${isLoopRoute(enabled) ? ' (loop)' : ' (one-way)'}`;
 }
 
-// A D change moves the estimated stop positions, so refresh the preview.
-targetKmEl.addEventListener('input', applyRoute);
+// D slider ↔ number (step 1 — no forced multiples of 5); a D change moves
+// the estimated stop positions, so refresh the route preview too.
+rangeEl.addEventListener('input', () => {
+  targetKmEl.value = rangeEl.value;
+  applyRoute();
+});
+targetKmEl.addEventListener('input', () => {
+  rangeEl.value = targetKmEl.value;
+  applyRoute();
+});
+
+// Compass wheel — ANY bearing (the old N/E/S/W dropdown had no SE). Unchecked
+// Auto parks it; checked Auto keeps the frontier aim and planning ignores it.
+const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+let bearingDeg = 0;
+
+function setBearing(deg) {
+  bearingDeg = ((deg % 360) + 360) % 360;
+  const shown = Math.round(bearingDeg) % 360;
+  needleEl.setAttribute('transform', `rotate(${bearingDeg} 50 50)`);
+  wheelEl.setAttribute('aria-valuenow', String(shown));
+  bearingDegEl.textContent = `${COMPASS[Math.round(bearingDeg / 22.5) % 16]} ${shown}°`;
+}
+
+bearingAutoEl.addEventListener('change', () => {
+  wheelEl.classList.toggle('off', bearingAutoEl.checked);
+  if (bearingAutoEl.checked) bearingDegEl.textContent = 'auto (frontier)';
+  else setBearing(bearingDeg);
+});
+
+const wheelAngle = (e) => {
+  const r = wheelEl.getBoundingClientRect();
+  const dx = e.clientX - (r.left + r.width / 2);
+  const dy = e.clientY - (r.top + r.height / 2);
+  return dx === 0 && dy === 0 ? null : (Math.atan2(dx, -dy) * 180) / Math.PI;
+};
+let wheelDrag = false;
+wheelEl.addEventListener('pointerdown', (e) => {
+  if (bearingAutoEl.checked) return;
+  wheelDrag = true;
+  wheelEl.setPointerCapture(e.pointerId);
+  const a = wheelAngle(e);
+  if (a != null) setBearing(a);
+});
+wheelEl.addEventListener('pointermove', (e) => {
+  if (!wheelDrag || bearingAutoEl.checked) return;
+  const a = wheelAngle(e);
+  if (a != null) setBearing(a);
+});
+wheelEl.addEventListener('pointerup', () => { wheelDrag = false; });
+wheelEl.addEventListener('keydown', (e) => {
+  if (bearingAutoEl.checked) return;
+  const step = { ArrowRight: 5, ArrowUp: 5, ArrowLeft: -5, ArrowDown: -5 }[e.key];
+  if (step) {
+    e.preventDefault();
+    setBearing(bearingDeg + step);
+  }
+});
+setBearing(0);
+wheelEl.classList.add('off');
+bearingDegEl.textContent = 'auto (frontier)';
 
 // Re-plan in the opposite order: reversing RE-ROUTES (the engine respects
 // one-way roads in the planned direction) — unlike riding the same GPX back.
@@ -365,7 +429,7 @@ form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const targetKm = Number(targetKmEl.value);
   const route = points.filter((p) => p.enabled);
-  const bearingKey = document.getElementById('bearing').value;
+  const bearingKey = bearingAutoEl.checked ? 'auto' : 'deg';
 
   setStatus('Planning…');
   planBtn.disabled = true;
@@ -381,7 +445,7 @@ form.addEventListener('submit', async (e) => {
     } catch (err) {
       console.error(err);
     }
-    const result = await planRoutes({ targetKm, route, bearingKey, profile, squares: { ...squaresState } });
+    const result = await planRoutes({ targetKm, route, bearingKey, bearingDeg, profile, squares: { ...squaresState } });
     if (result.degenerate) {
       const why = result.collapsedKm != null
         ? `probe collapsed to a ${result.collapsedKm} km ring (mostly out-and-back) — pick another bearing`

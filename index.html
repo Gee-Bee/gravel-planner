@@ -32,7 +32,12 @@
     }
     header.app-header h1 { margin: 0; font-size: 1.05rem; font-weight: 600; }
     header.app-header h1 svg { vertical-align: -0.14em; margin-right: 0.3rem; }
-    main { max-width: 480px; margin: 0 auto; padding: 1rem; }
+    main {
+      max-width: 480px; margin: 0 auto; padding: 1rem;
+      /* config first on narrow — picking the points is essential */
+      display: flex; flex-direction: column;
+    }
+    #config-details { order: -1; }
     #planner-form {
       background: var(--card);
       padding: 1rem;
@@ -48,6 +53,27 @@
       border-radius: 6px; cursor: pointer;
     }
     #route-reverse:hover { background: var(--primary); color: #fff; }
+    .row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--primary); }
+    .row input[type="number"] { flex: none; width: 4.4rem; text-align: center; }
+    .bearing-row { display: flex; gap: 0.6rem; align-items: center; }
+    #bearing-wheel {
+      width: 84px; height: 84px; flex: none; background: var(--bg);
+      border: 1px solid #ddd; border-radius: 50%; touch-action: none; cursor: crosshair;
+    }
+    #bearing-wheel.off { opacity: 0.4; pointer-events: none; }
+    .bearing-side { flex: 1; min-width: 0; }
+    .bearing-side label { display: flex; gap: 0.35rem; align-items: center; margin-bottom: 0.35rem; }
+    #bearing-deg { font-size: 0.95rem; font-weight: 600; color: var(--text); }
+    @media (min-width: 900px) {
+      main {
+        max-width: 1000px; display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 0.6rem 1.2rem; align-items: start;
+      }
+      #planner-form { grid-column: 1; grid-row: 1; }
+      #status { grid-column: 1; grid-row: 2; margin-top: 0; }
+      details.config { grid-column: 2; grid-row: 1 / span 2; margin-top: 0; order: initial; }
+    }
     select, input[type="number"] {
       width: 100%; padding: 0.5rem; font-size: 0.9rem;
       border: 1px solid #ccc; border-radius: var(--radius);
@@ -148,7 +174,30 @@
       <div class="form-grid">
         <div>
           <label for="target-km">D [km] (required)</label>
-          <input type="number" id="target-km" name="targetKm" min="10" max="300" step="5" required value="50" />
+          <div class="row">
+            <input type="range" id="target-km-range" min="10" max="300" step="1" value="50" aria-label="D in kilometres" />
+            <input type="number" id="target-km" name="targetKm" min="10" max="300" step="1" required value="50" />
+          </div>
+        </div>
+        <div>
+          <label>Bearing <small>(auto = frontier-aimed)</small></label>
+          <div class="bearing-row">
+            <svg id="bearing-wheel" viewBox="0 0 100 100" tabindex="0" role="slider" aria-label="Bearing in degrees" aria-valuemin="0" aria-valuemax="359" aria-valuenow="0" title="Drag to set any outbound bearing (the route aims within ±45° of it); Auto keeps the frontier aim">
+              <circle cx="50" cy="50" r="40" fill="none" stroke="#ccc" stroke-width="1.5" />
+              <g font-size="10" fill="#6c757d" text-anchor="middle" font-weight="600">
+                <text x="50" y="13">N</text>
+                <text x="91" y="53">E</text>
+                <text x="50" y="93">S</text>
+                <text x="9" y="53">W</text>
+              </g>
+              <line id="bearing-needle" x1="50" y1="50" x2="50" y2="18" stroke="#2a9d8f" stroke-width="3" stroke-linecap="round" />
+              <circle cx="50" cy="50" r="3.2" fill="#2a9d8f" />
+            </svg>
+            <div class="bearing-side">
+              <label><input type="checkbox" id="bearing-auto" checked /> Auto (new squares)</label>
+              <div id="bearing-deg">auto</div>
+            </div>
+          </div>
         </div>
         <div class="full">
           <div class="route-head">
@@ -156,16 +205,6 @@
             <button type="button" id="route-reverse" title="Re-plan the same points in the opposite order — reversing RE-ROUTES (the engine respects one-way roads), unlike riding the same GPX back">⇄ reverse</button>
           </div>
           <div id="route-info">—</div>
-        </div>
-        <div>
-          <label for="bearing">Bearing (auto = frontier-aimed)</label>
-          <select id="bearing" name="bearing">
-            <option value="auto" selected>Auto (new squares)</option>
-            <option value="n">N</option>
-            <option value="e">E</option>
-            <option value="s">S</option>
-            <option value="w">W</option>
-          </select>
         </div>
         <div class="full">
           <label for="uid" title="How to get it: open squadrats.com while logged in → DevTools (F12) → Application → Local Storage → lastKnownUid. It is your account id — stable; it changes only with a new account. Saved in this browser.">Squadrats uid <small>(enables squares)</small></label>
