@@ -40,6 +40,14 @@
       box-shadow: 0 2px 8px rgba(0,0,0,0.08);
     }
     label { font-size: 0.75rem; font-weight: 600; color: var(--muted); display: block; margin-bottom: 0.15rem; }
+    #route-info { font-size: 0.78rem; color: var(--text); overflow-wrap: anywhere; }
+    .route-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
+    #route-reverse {
+      flex: none; padding: 0.25rem 0.55rem; font-size: 0.75rem; font-weight: 600;
+      background: #fff; color: var(--primary); border: 1px solid var(--primary);
+      border-radius: 6px; cursor: pointer;
+    }
+    #route-reverse:hover { background: var(--primary); color: #fff; }
     select, input[type="number"] {
       width: 100%; padding: 0.5rem; font-size: 0.9rem;
       border: 1px solid #ccc; border-radius: var(--radius);
@@ -142,9 +150,12 @@
           <label for="target-km">D [km] (required)</label>
           <input type="number" id="target-km" name="targetKm" min="10" max="300" step="5" required value="50" />
         </div>
-        <div>
-          <label for="start">Start <small>(from config)</small></label>
-          <select id="start" name="start"></select>
+        <div class="full">
+          <div class="route-head">
+            <label>Route <small>(first checked = start — duplicate the first row to close the loop)</small></label>
+            <button type="button" id="route-reverse" title="Re-plan the same points in the opposite order — reversing RE-ROUTES (the engine respects one-way roads), unlike riding the same GPX back">⇄ reverse</button>
+          </div>
+          <div id="route-info">—</div>
         </div>
         <div>
           <label for="bearing">Bearing (auto = frontier-aimed)</label>
@@ -174,12 +185,12 @@
     <div id="status"></div>
 
     <details id="config-details" class="config">
-      <summary>Configuration — start points (form + YAML, saved in this browser)</summary>
-      <p class="hint">Private start points live only in this browser (localStorage), never in the repo. Edit the list: add/remove, drag ⠿ to reorder (order is kept), uncheck to keep a point out of planning; type <code>lon, lat</code> (a pasted <code>lat, lon</code> is auto-detected) or pick 📍 on the map. The YAML below mirrors the form and auto-saves; hand-edited YAML applies with <b>Apply YAML</b>. Format: top-level <code>pois:</code> list of <code>label/lon/lat</code> (+ optional <code>enabled: false</code>); optional <code>squares_uid</code> prefills the uid; a legacy <code>name:</code> mapping still loads.</p>
+      <summary>Configuration — route points (form + YAML, saved in this browser)</summary>
+      <p class="hint">Private points live only in this browser (localStorage), never in the repo. Edit the list: add/remove, drag ⠿ to reorder (order is kept), uncheck to keep a point out of planning; type <code>lon, lat</code> (a pasted <code>lat, lon</code> is auto-detected) or pick 📍 on the map. The checked points form the route <b>in list order</b> — the first is the start, the rest are the stops visited on the way; a last point back at the start makes it a loop (duplicate the first row as the last), anything else plans a one-way route. The YAML below mirrors the form and auto-saves; hand-edited YAML applies with <b>Apply YAML</b>. Format: top-level <code>pois:</code> list of <code>label/lon/lat</code> (+ optional <code>enabled: false</code>); optional <code>squares_uid</code> prefills the uid; a legacy <code>name:</code> mapping still loads.</p>
       <template id="poi-row-tpl">
         <div class="poi-row">
           <button type="button" class="poi-drag" draggable="false" title="Drag to reorder — the order is kept in the YAML">⠿</button>
-          <input type="checkbox" class="poi-enabled" checked title="Checked = used for planning; unchecked = kept in the config only" />
+          <input type="checkbox" class="poi-enabled" checked title="Checked = part of the route (list order = visit order); unchecked = kept in the config only" />
           <input type="text" class="poi-label" placeholder="label" maxlength="60" />
           <input type="text" class="poi-coords" placeholder="lon, lat" spellcheck="false" title="Decimal degrees, lon first — a pasted lat, lon pair is auto-detected" />
           <button type="button" class="poi-pick" title="Pick the coordinates on the map">📍</button>

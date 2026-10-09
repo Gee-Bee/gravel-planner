@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>planner v7.1 — static tests</title>
+  <title>planner v7.2 — static tests</title>
   <style>
     body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; background: #f4f1ea; color: #1d3557; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
     h1 { font-size: 1.1rem; }
@@ -20,7 +20,7 @@
   </script>
 </head>
 <body>
-  <h1>planner v7.1 (nubRuns / spliceNub / ringVias / squares parse) — static tests</h1>
+  <h1>planner v7.2 (nubRuns / spliceNub / ringVias / route chain / squares parse) — static tests</h1>
   <ul id="results"></ul>
   <div id="summary"></div>
 
@@ -31,6 +31,10 @@
       ringVias,
       interiorDoubledKm,
       stubVias,
+      routeStops,
+      isLoopRoute,
+      chainHopKm,
+      outboundCut,
     } from './src/planner.js';
     import {
       parseVisitedPolygons,
@@ -44,6 +48,7 @@
       cellCenter,
       bearingDeg as gridBearingDeg,
       computeFrontier,
+      distanceKm,
     } from './src/geometry.js';
     import { aimAtFrontier, frontierAnchors } from './src/planner.js';
     import { DLON } from './src/constants.js';
@@ -481,6 +486,52 @@
       assert(parseCoordsText('300, 52') === null, 'lon out of range → null');
       assert(parseCoordsText('16, 200') === null, 'swapped lon out of range → null');
       assert(parseCoordsText('16.0') === null, 'single value → null');
+    });
+
+    // ---- route chain (v7.2: E sparse-first + one-way routes) ----
+
+    test('routeStops: first checked = start, rest = stops in order, single point closes itself', () => {
+      const a = { lon: 16.0, lat: 52.0 }, b = { lon: 16.1, lat: 52.0 }, c = { lon: 16.2, lat: 52.1 };
+      assert(JSON.stringify(routeStops([a])) === JSON.stringify([a]), 'single point → itself (loop closure)');
+      const stops = routeStops([a, b, c]);
+      assert(stops.length === 2 && stops[0] === b && stops[1] === c, 'first = start, the rest are the stops');
+      assert(routeStops([]).length === 0, 'empty route → no stops');
+    });
+
+    test('isLoopRoute: single point or duplicated first = loop, else one-way', () => {
+      const a = { lon: 16.0, lat: 52.0 }, b = { lon: 16.1, lat: 52.0 };
+      assert(isLoopRoute([a]), 'a single checked point is a loop');
+      assert(isLoopRoute([a, b, { ...a }]), 'duplicated first row closes the loop');
+      assert(!isLoopRoute([a, b]), 'different end point = one-way route');
+    });
+
+    test('chainHopKm: hops = air × ROAD_INFLATION, no stops → 0', () => {
+      const a = { lon: 16.0, lat: 52.0 }, b = { lon: 16.1, lat: 52.0 };
+      assert(chainHopKm([a]) === 0, 'single stop → no hops');
+      const one = chainHopKm([a, b]);
+      assert(Math.abs(one - distanceKm(a, b) * 1.7) < 0.01, `one hop ×1.7: ${one}`);
+      assert(chainHopKm([a, b, a]) > one, 'two hops cost more than one');
+    });
+
+    test('outboundCut: loop closure cuts at the FINAL arrival, not the departure zone', () => {
+      const ring = uLoop();
+      const cut = outboundCut(ring, START, START);
+      assert(cut === ring.length - 1, `first-match would cut early: cut=${cut} of ${ring.length}`);
+    });
+
+    test('outboundCut: a mid-ring stop cuts where the outbound ends', () => {
+      const ring = uLoop(); // (0,0)→N→(10,18)→S→home; the NE corner sits after the first two edges
+      const corner = { lon: kmToLon(10), lat: kmToLat(18) };
+      const cut = outboundCut(ring, START, corner);
+      assert(cut > ring.length * 0.3 && cut < ring.length * 0.7, `cut off the corner leg: ${cut}/${ring.length}`);
+    });
+
+    test('ringVias: sparse step (5.4 km) coarsens the dense (1.8 km) pins ~3×', () => {
+      const dense = ringVias(uLoop(), START);
+      const sparse = ringVias(uLoop(), START, 5.4);
+      assert(dense.length >= 25, `dense pins on the 56 km ring: ${dense.length}`);
+      assert(sparse.length > 0 && sparse.length < dense.length, `sparse ${sparse.length} vs dense ${dense.length}`);
+      assert(sparse.length <= Math.ceil(dense.length / 3) + 1, `sparse should be ~1/3: ${sparse.length}/${dense.length}`);
     });
 
     const list = document.getElementById('results');

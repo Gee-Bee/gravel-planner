@@ -6,10 +6,13 @@
 // restores it as "user Defined" and routes with the riding profile, no manual
 // upload or selection needed. Custom profiles live in the server cache only
 // (no download/list endpoint — the id is the only handle), so the id is kept
-// in localStorage and verified with a header-only routing HEAD (200 = alive,
-// 500 = evicted) before EVERY reuse; evicted → one silent re-upload. The id
-// therefore survives browser restarts, and a still-cached profile is never
-// uploaded twice (measured: ids stay routable well beyond a session).
+// in localStorage TOGETHER with the fnv1a revision of the .brf it came from —
+// a profile edit re-uploads automatically (a stale id keeps serving the OLD
+// text while staying 200-alive on the HEAD) — and verified with a header-only
+// routing HEAD (200 = alive, 500 = evicted) before EVERY reuse; evicted → one
+// silent re-upload. The id therefore survives browser restarts, and a
+// still-cached profile is never uploaded twice (measured: ids stay routable
+// well beyond a session).
 // Upload failure = fall back to stock gravel + URL flags (reported in the UI).
 
 import { HttpError } from './api/brouter.js';
@@ -27,9 +30,24 @@ async function profileExists(id) {
   return res.ok;
 }
 
+// fnv-1a (32-bit) over the .brf text — the stored cache revision.
+function brfRevision(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
 export async function getRidingProfileId() {
-  const cached = localStorage.getItem(CACHE_KEY);
-  if (cached) {
+  const brf = await (await fetch(PROFILE_MD)).text();
+  const revision = brfRevision(brf);
+  const stored = localStorage.getItem(CACHE_KEY) ?? '';
+  const sep = stored.indexOf(':');
+  const savedRev = sep < 0 ? '' : stored.slice(0, sep);
+  const cached = sep < 0 ? '' : stored.slice(sep + 1);
+  if (cached && savedRev === revision) {
     try {
       if (await profileExists(cached)) return cached;
     } catch (err) {
@@ -38,13 +56,12 @@ export async function getRidingProfileId() {
       // surfaces with its exact URL on the routing error (§0.3).
       return cached;
     }
-    localStorage.removeItem(CACHE_KEY);
+    // 500 = evicted server-side → fall through to a fresh upload.
   }
-  const brf = await (await fetch(PROFILE_MD)).text();
   const res = await fetch(UPLOAD_URL, { method: 'POST', body: brf });
   if (!res.ok) throw new HttpError(res.status, UPLOAD_URL);
   const { profileid, error } = await res.json();
   if (!profileid) throw new Error(error ?? 'profile upload failed');
-  localStorage.setItem(CACHE_KEY, profileid);
+  localStorage.setItem(CACHE_KEY, `${revision}:${profileid}`);
   return profileid;
 }

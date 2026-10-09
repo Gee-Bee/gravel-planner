@@ -1,14 +1,21 @@
-// Planning pipeline v7.1 — deliver the engine's own ring, pinned by vias.
-// A via at or past an impassable band makes the engine ride a there-and-back
-// finger (measured on the Biedrusko probe: the loop S→A₀→B₀→S itself doubles
-// its A→B section; a single via near the band lands on a dead-end road and
-// renders as a nawrót). No anchor choice can predict the engine's approach.
-// So: probe the loop, splice any doubled finger out of the probe geometry,
-// then pin the spliced ring with vias every ~RING_VIA_STEP_KM (all cut from
-// the geometry the engine itself rode) and re-route. The delivery follows the
-// ring by construction; a plain-engine verify gate (same engine as preview —
-// the flagged URL routes differently, measured 43.9 vs 44.3 km) rejects any
-// doubled strands or gross length drift before the route is handed out.
+// Planning pipeline v7.2 — route chain from the config, sparse-first delivery.
+// Route model: the checked points in list order ARE the route — first = start,
+// the rest are stops in visit order; a stop back at the start (a single point,
+// or the first row duplicated last) closes the loop, anything else is one-way.
+// The bearing-aimed outbound leg (start → first stop) carries D minus the
+// stop-to-stop hops (air × ROAD_INFLATION, priced up front); the hops ride
+// free.
+//
+// The engine's own geometry still decides the roads: probe the route, splice
+// any doubled finger out of the probe geometry, then pin the outbound leg
+// with vias cut from the geometry the engine itself rode and re-route. A via
+// at or past an impassable band makes the engine ride a there-and-back
+// finger (measured on the Biedrusko probe), so the pins are SPARSE first (E):
+// few pins leave the engine room to pick roads by the profile between them;
+// when the verify gate rejects the sparse delivery (doubled strands / length
+// drift / stubs) the dense pin set is ADDED as the fallback. The plain-engine
+// gate (same engine as preview — the flagged URL routes differently, measured
+// 43.9 vs 44.3 km) must pass or the candidate is dead.
 
 import { LOOP_TIP_KM, ROAD_INFLATION, planAnchorsRadial } from './planning.js';
 import { PROFILE } from './constants.js';
@@ -55,6 +62,14 @@ const SAFE_END_FRACTION = 0.06;
 const SAFE_END_MAX_KM = 6;
 // Ring pins: one via about every step of path, all on engine-ridden roads.
 const RING_VIA_STEP_KM = 1.8;
+// E — sparse-first delivery: ~1/3 of the pins, the engine keeps the road
+// choice between them (measured D=50: a sparse set reproduced the ring —
+// 40.9 km / 17.3 km paved, identical to the dense set); the dense set is the
+// FALLBACK when the verify gate rejects a sparse attempt.
+const RING_VIA_SPARSE_STEP_KM = 5.4;
+// A last point within this distance of the start closes the loop (a single
+// checked point or the duplicated first row).
+const LOOP_CLOSE_KM = 0.1;
 // Via stubs: a via at the tip of a short dead-end branch makes the engine
 // ride in and back out — two passes 0.3–3 km of path apart, same spot.
 const STUB_MIN_PATH_KM = 0.3;
@@ -80,9 +95,10 @@ const RING_MIN_FACTOR = 0.5;
 // still leaves room for the loop); 1.4× slack for the closing leg.
 const FRONTIER_REACH = 1.4;
 
-// Fetch budget: auto+quares probes 5 bearings then delivers up to 3 ranked
-// rings (+1 stub retry each); manual/no-squares stays within the old 4.
-const MAX_FETCHES = 9;
+// Fetch budget: up to 5 probe bearings + up to 3 ranked deliveries, each a
+// sparse attempt then the dense fallback (+1 stub retry each) → ≤ 16 calls.
+// §0.4 (3–4 min wall clock) is the real limit; this guards the call count.
+const MAX_FETCHES = 17;
 
 const KLAT = 110.57;
 const kxAt = (lat) => 111.32 * Math.cos((lat * Math.PI) / 180);
@@ -206,6 +222,59 @@ export function ringVias(ringCoords, start, stepKm = RING_VIA_STEP_KM) {
 }
 
 /**
+ * Route model (v7.2) — the checked points in list order ARE the route: the
+ * first is the start, the rest are the stops in visit order. A single point
+ * yields itself (the loop closure); a duplicated first point closes the loop,
+ * any other last point makes the route one-way (ends at it).
+ */
+export function routeStops(route) {
+  if (!route?.length) return [];
+  return route.length > 1 ? route.slice(1) : [route[0]];
+}
+
+/** Loop = a single checked point or the last point back at the start. */
+export function isLoopRoute(route) {
+  if (!route?.length) return false;
+  return route.length === 1 || distanceKm(route[0], route[route.length - 1]) < LOOP_CLOSE_KM;
+}
+
+/**
+ * Stop-to-stop hops priced into D up front: routed ≈ air × ROAD_INFLATION
+ * (the planning.js sample mean). The outbound leg gets the rest — a chain
+ * whose hops alone exceed D is rejected with the minimum D in the message.
+ */
+export function chainHopKm(stops) {
+  let km = 0;
+  for (let i = 0; i + 1 < stops.length; i++) {
+    km += distanceKm(stops[i], stops[i + 1]) * ROAD_INFLATION;
+  }
+  return +km.toFixed(2);
+}
+
+/**
+ * Index on the ring where the outbound leg ends — the LAST vertex at the
+ * first stop. Last, not first: the departure zone around the start sits
+ * within the same distance of a start-closing stop, so a first-match would
+ * cut the leg at the first metres (no vias left); for the loop closure the
+ * last match is the final arrival. Stops lie on the probe path by
+ * construction; nearest vertex is the off-geometry fallback (spliced stop).
+ */
+export function outboundCut(ringCoords, start, firstStop) {
+  const { P, kx } = planar(ringCoords ?? [], start);
+  const qx = (firstStop.lon - start.lon) * kx;
+  const qy = (firstStop.lat - start.lat) * KLAT;
+  let cut = -1;
+  let nearest = 0;
+  let best = Infinity;
+  for (let i = 0; i < P.length; i++) {
+    const d = Math.hypot(P[i].x - qx, P[i].y - qy);
+    if (d < LOOP_CLOSE_KM) cut = i;
+    if (d < best) { best = d; nearest = i; }
+  }
+  return cut >= 0 ? cut : nearest;
+}
+
+/**
  * Via stubs: turn-around bases in the delivery — two passes 0.3–3 km of path
  * apart returning to the same spot (< STUB_EPS_KM). A via pinned on the tip
  * of a short dead-end branch the ring itself rode makes the engine ride in
@@ -290,8 +359,31 @@ export function frontierAnchors(start, polygons, targetKm, sector = null) {
 }
 
 export async function planRoutes(params) {
-  const start = params.start;
-  if (!start) throw new Error('no start — save the config YAML first');
+  const route = params.route ?? [];
+  const start = route[0];
+  if (!start) throw new Error('no start — tick a point in the config first');
+  // Route chain (v7.2): stops in list order — a stop back at the start
+  // (single point / duplicated first row) closes the loop, anything else ends
+  // one-way. The bearing-aimed outbound leg carries D minus the hops below; a
+  // chain that does not even fit D is reported up front (§0.3 exact message).
+  const stops = routeStops(route);
+  const hopKm = chainHopKm(stops);
+  const leg1Km = params.targetKm - hopKm;
+  // The whole chain must FIT in D — every leg by air × ROAD_INFLATION plus
+  // the lollipop tip (2× so the radius stays above zero at the boundary).
+  // Otherwise the router overshoots D whatever the anchors do; report the
+  // minimum instead (§0.3 exact message).
+  const minKm = Math.ceil(distanceKm(start, stops[0]) * ROAD_INFLATION + hopKm + 2 * LOOP_TIP_KM);
+  if (params.targetKm < minKm) {
+    throw new Error(
+      `D too small — this route needs D ≈ ${minKm} km (legs by air ×${ROAD_INFLATION} + tip loop)`,
+    );
+  }
+  // Wander room: the outbound budget minus the start→first-stop traversal.
+  // Anchors size the LOOPS into it — a start-closing stop has no traversal
+  // (classic loop, sizing unchanged), a far first stop only lends its excess
+  // as wander instead of bolting a full lollipop onto the traversal.
+  const wanderKm = leg1Km - distanceKm(start, stops[0]) * ROAD_INFLATION;
   // B5: the riding profile (uploaded .brf) decides the roads — probe, ring and
   // delivery all optimize with the SAME cost function the user rides with;
   // stock gravel is only the upload-failure fallback.
@@ -301,11 +393,16 @@ export async function planRoutes(params) {
   // the full circle, manual inside its ±45° quadrant; no squares → aim null
   // (auto falls back to N, README: same algorithm, visits just ignored).
   const squares = params.squares;
-  const manual = params.bearingKey && params.bearingKey !== 'auto';
-  const sector = manual ? BEARINGS[params.bearingKey] ?? BEARINGS.n : null;
+  const manual = !!params.bearingKey && params.bearingKey !== 'auto';
+  // 'deg' = arbitrary angle from the compass wheel; the N/E/S/W keys keep
+  // their cardinals (any sector works — the ±45° fan/aim logic is generic).
+  const deg = Number(params.bearingDeg);
+  const sector = params.bearingKey === 'deg'
+    ? (Number.isFinite(deg) ? ((deg % 360) + 360) % 360 : 0)
+    : manual ? BEARINGS[params.bearingKey] ?? BEARINGS.n : null;
   const hasSquares = !!squares?.polygons?.length;
   const aim = hasSquares
-    ? aimAtFrontier(start, squares.polygons, params.targetKm, sector)
+    ? aimAtFrontier(start, squares.polygons, wanderKm, sector)
     : null;
 
   let fetches = 0;
@@ -319,15 +416,14 @@ export async function planRoutes(params) {
   // A4.9). Radius rescaling does NOT calibrate ring length (measured D=50,
   // ×1.14: the nub grows faster than the ring and a second nub appears).
   const probeBearing = async (brg, targets = null) => {
-    const anchors = targets ?? planAnchorsRadial(start, brg, params.targetKm);
-    const probe = await fetchCounted([start, ...anchors, start], { plain: true, profile });
+    const anchors = targets ?? planAnchorsRadial(start, brg, wanderKm);
+    const probe = await fetchCounted([start, ...anchors, ...stops], { plain: true, profile });
     const probeCoords = extractCoords(probe.geojson);
     const ring = spliceNub(probeCoords, start);
     const { cum: ringCum } = planar(ring.coords, start);
-    const vias = ringViasIdx(ring.coords, start).map((i) => {
-      const [lon, lat] = ring.coords[i];
-      return { lon, lat };
-    });
+    // Pins hold the OUTBOUND leg only (start → first stop); the stop hops
+    // ride free — the verify gate still watches the whole route.
+    const leg1 = ring.coords.slice(0, outboundCut(ring.coords, start, stops[0]) + 1);
     return {
       brg,
       anchors,
@@ -336,7 +432,8 @@ export async function planRoutes(params) {
       ringCoords: ring.coords,
       splicedKm: ring.nubKm,
       ringKm: +ringCum[ringCum.length - 1].toFixed(2),
-      vias,
+      vias: ringVias(leg1, start),
+      sparseVias: ringVias(leg1, start, RING_VIA_SPARSE_STEP_KM),
       // Ranking signal: fresh cells on the spliced ring (A3 — max nowych);
       // fine-grid fresh is the tiebreak (coarse ties are common near the union).
       fresh: squares?.polygons?.length
@@ -357,9 +454,10 @@ export async function planRoutes(params) {
     ...extra,
   } });
 
-  // Deliver a probed ring: pin vias, verify no doubled strands and ring
-  // parity; drop via stubs (dead-end tips) and retry once. ok=false = the
-  // verify gate rejected it (the engine, not the map, decides rideability).
+  // Deliver a probed route: SPARSE pins first (E — few pins leave the engine
+  // room to choose roads by the profile between them), the dense set as the
+  // fallback when the verify gate rejects the sparse attempt. ok=false = the
+  // gate rejected BOTH (the engine, not the map, decides rideability).
   const deliver = async (pre) => {
 
     if (pre.ringKm < params.targetKm * RING_MIN_FACTOR) {
@@ -368,72 +466,87 @@ export async function planRoutes(params) {
 
     if (pre.vias.length === 0) {
       return degenerate(pre, {
-        previewUrl: buildPreviewUrl([start, ...pre.anchors, start], { profile }),
+        previewUrl: buildPreviewUrl([start, ...pre.anchors, ...stops], { profile }),
         b1Url: pre.probe.url,
       });
     }
 
-    // Delivery (plain = the preview engine's routing): verify no doubled
-    // strands and ring parity; drop via stubs (dead-end tips) and retry once.
-    let activeVias = pre.vias;
-    let delivery = await fetchCounted([start, ...activeVias, start], { plain: true, profile });
-    let deliveryCoords = extractCoords(delivery.geojson);
-    let deliveryKm = trackLengthKm(delivery.geojson);
-    const stubs = stubVias(deliveryCoords, activeVias, start, new Set());
-    if (stubs.length > 0) {
-      activeVias = pre.vias.filter((_, k) => !stubs.includes(k));
-      delivery = await fetchCounted([start, ...activeVias, start], { plain: true, profile });
-      deliveryCoords = extractCoords(delivery.geojson);
-      deliveryKm = trackLengthKm(delivery.geojson);
-      if (stubVias(deliveryCoords, activeVias, start, new Set()).length > 0) {
-        return degenerate(pre, {
-          stubs: stubs.length,
-          previewUrl: buildPreviewUrl([start, ...activeVias, start], { profile }),
-          b1Url: delivery.url,
-        });
-      }
-    }
-    const doubledKm = interiorDoubledKm(deliveryCoords, start);
-    const driftKm = deliveryKm == null ? null : +(deliveryKm - pre.ringKm).toFixed(2);
-    if (doubledKm > DOUBLED_TOL_KM || driftKm == null || Math.abs(driftKm) > PARITY_TOL_KM) {
-      return degenerate(pre, {
-        doubledKm,
-        driftKm,
-        previewUrl: buildPreviewUrl([start, ...activeVias, start], { profile }),
-        b1Url: buildUrl([start, ...activeVias, start], { profile }),
-      });
-    }
-
-    // Squares report (optional): coarse grid drives the aim, the fine grid
-    // (squadratinhos) rides along in the report — a ring can pick zero new
-    // squadrats yet still cut fresh squadratinhos (measured: 0 new / 12 inho).
-    const cells = squares?.polygons?.length
-      ? {
-          ...countNewCells(deliveryCoords, squares.polygons),
-          inho: squares.polygonsInho?.length
-            ? countNewCells(deliveryCoords, squares.polygonsInho)
-            : null,
+    const pointsOf = (vias) => [start, ...vias, ...stops];
+    // One attempt (plain = the preview engine's routing): drop via stubs
+    // (dead-end tips) once, then gate — doubled strands + ring parity.
+    const attempt = async (vias) => {
+      let activeVias = vias;
+      let delivery = await fetchCounted(pointsOf(activeVias), { plain: true, profile });
+      let deliveryCoords = extractCoords(delivery.geojson);
+      let deliveryKm = trackLengthKm(delivery.geojson);
+      const stubs = stubVias(deliveryCoords, activeVias, start, new Set());
+      if (stubs.length > 0) {
+        activeVias = vias.filter((_, k) => !stubs.includes(k));
+        delivery = await fetchCounted(pointsOf(activeVias), { plain: true, profile });
+        deliveryCoords = extractCoords(delivery.geojson);
+        deliveryKm = trackLengthKm(delivery.geojson);
+        if (stubVias(deliveryCoords, activeVias, start, new Set()).length > 0) {
+          return { fail: { stubs: stubs.length }, activeVias, delivery };
         }
-      : null;
+      }
+      const doubledKm = interiorDoubledKm(deliveryCoords, start);
+      const driftKm = deliveryKm == null ? null : +(deliveryKm - pre.ringKm).toFixed(2);
+      if (doubledKm > DOUBLED_TOL_KM || driftKm == null || Math.abs(driftKm) > PARITY_TOL_KM) {
+        return { fail: { doubledKm, driftKm }, activeVias, delivery };
+      }
+      return { ok: true, activeVias, delivery, deliveryCoords, deliveryKm, doubledKm, driftKm };
+    };
 
-    return { ok: true, result: {
-      start,
-      trackname,
-      bearing: Math.round(((pre.brg % 360) + 360) % 360),
-      measuredKm: deliveryKm,
-      probeKm: pre.probeKm,
-      ringKm: pre.ringKm,
-      nubKm: pre.splicedKm,
-      doubledKm,
-      viaCount: activeVias.length,
-      cells,
-      aimedKm: aim ? aim.dKm : null,
-      bearingDeviation: aim ? Math.round(pre.brg - aim.bearingDeg) : null,
-      previewUrl: buildPreviewUrl([start, ...activeVias, start], { profile }),
-      // Backend link with the B1.4 flags — built, not fetched (the flagged
-      // engine routes differently than the preview; verified on plain above).
-      b1Url: buildUrl([start, ...activeVias, start], { profile }),
-    } };
+    const sparse = pre.sparseVias ?? [];
+    const useSparse = sparse.length > 0 && sparse.length < pre.vias.length;
+    const tries = useSparse
+      ? [[sparse, 'sparse'], [pre.vias, 'dense']]
+      : [[pre.vias, 'dense']];
+    let failed = null;
+    for (const [vias, mode] of tries) {
+      const att = await attempt(vias);
+      if (att.ok) {
+        const { activeVias, deliveryCoords, deliveryKm, doubledKm } = att;
+
+        // Squares report (optional): coarse grid drives the aim, the fine grid
+        // (squadratinhos) rides along in the report — a ring can pick zero new
+        // squadrats yet still cut fresh squadratinhos (measured: 0 new / 12 inho).
+        const cells = squares?.polygons?.length
+          ? {
+              ...countNewCells(deliveryCoords, squares.polygons),
+              inho: squares.polygonsInho?.length
+                ? countNewCells(deliveryCoords, squares.polygonsInho)
+                : null,
+            }
+          : null;
+
+        return { ok: true, result: {
+          start,
+          trackname,
+          bearing: Math.round(((pre.brg % 360) + 360) % 360),
+          measuredKm: deliveryKm,
+          probeKm: pre.probeKm,
+          ringKm: pre.ringKm,
+          nubKm: pre.splicedKm,
+          doubledKm,
+          viaCount: activeVias.length,
+          pinMode: useSparse && mode === 'dense' ? 'dense-fallback' : mode,
+          cells,
+          aimedKm: aim ? aim.dKm : null,
+          bearingDeviation: aim ? Math.round(pre.brg - aim.bearingDeg) : null,
+          previewUrl: buildPreviewUrl(pointsOf(activeVias), { profile }),
+          // Direct engine link — built, not fetched; a custom id needs no URL
+          // flags (the uploaded profile carries them), stock fallback gets B1.4.
+          b1Url: buildUrl(pointsOf(activeVias), { profile }),
+        } };
+      }
+      failed = att;
+    }
+    return degenerate(pre, {
+      ...failed.fail,
+      previewUrl: buildPreviewUrl(pointsOf(failed.activeVias), { profile }),
+      b1Url: buildUrl(pointsOf(failed.activeVias), { profile }),
+    });
   };
 
   // Frontier lollipop FIRST (A4.9: the leg goes straight to the frontier —
@@ -444,7 +557,7 @@ export async function planRoutes(params) {
   // D=80, measured) ranked by fresh cells, delivered until the gate passes
   // one. Auto without squares = N only — same algorithm, visits ignored.
   const frontier = hasSquares
-    ? frontierAnchors(start, squares.polygons, params.targetKm, sector)
+    ? frontierAnchors(start, squares.polygons, wanderKm, sector)
     : null;
   let last = null;
   if (frontier) {

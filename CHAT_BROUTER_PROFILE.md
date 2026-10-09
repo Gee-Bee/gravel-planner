@@ -2,6 +2,8 @@
 # This customizable profile, developed by quaelnix, is designed for gravel cyclists who want to avoid traffic as much
 # as possible, but still get to their destination efficiently - taking into account the capabilities of a gravel bike.
 # >>> DELTA Antilights+NOBRUSH+R: aktywne BLOK 1, BLOK 2, BLOK R; zakomentowane BLOK 3v2, 3b, 3c (kolejnosc testow: R -> 3v2 -> 3b)
+# >>> DELTA B1.4-parity: prefer_unpaved_paths + avoid_noise default TRUE — bikerouter ignores profile:* URL params,
+# so the flags must live in the profile itself for the preview link to route like the planner (URL params still override).
 ---context:global
 assign turnInstructionRoundabouts true # %turnInstructionRoundabouts% | Special turn-by-turn directions for roundabouts | boolean
 assign considerTurnRestrictions true
@@ -19,14 +21,14 @@ assign bikerPower = 150 # %bikerPower% | Average power (W) provided by the biker
 assign use_proposed_cycleroutes = false # %use_proposed_cycleroutes% | Set to true to consider proposed and regular cycleroutes as equals | boolean
 assign consider_traffic_estimate false # %consider_traffic_estimate% | Enable to consider traffic estimates | boolean
 assign assume_wet_conditions false # %assume_wet_conditions% | Enable to assume wet conditions | boolean
-assign prefer_unpaved_paths false # %prefer_unpaved_paths% | Enable to prefer unpaved paths | boolean
+assign prefer_unpaved_paths true # %prefer_unpaved_paths% | Enable to prefer unpaved paths | boolean
 assign avoid_steep_inclines false # %avoid_steep_inclines% | Enable to avoid steep inclines | boolean
 assign prefer_cycle_routes false # %prefer_cycle_routes% | Enable to prefer cycle routes | boolean
 assign consider_elevation false # %consider_elevation% | Enable to consider elevation | boolean
 assign prefer_forests false # %prefer_forests% | Enable to prefer forest areas | boolean
 assign prefer_rivers false # %prefer_rivers% | Enable to prefer river valleys | boolean
 assign avoid_towns false # %avoid_towns% | Enable to avoid urban areas | boolean
-assign avoid_noise false # %avoid_noise% | Enable to avoid noisy areas | boolean
+assign avoid_noise true # %avoid_noise% | Enable to avoid noisy areas | boolean
 # with engine defaults, long parts of routing to via points may be removed
 assign correctMisplacedViaPoints = false # %correctMisplacedViaPoints% | Set to true to remove detours due to via points (going back and forth on the same route) | boolean
 assign correctMisplacedViaPointsDistance = 400 # %correctMisplacedViaPointsDistance% | Only remove detours shorter than this (one-way) distance (in m) (engine defaults to 0 which removes detours whatever their length) | number

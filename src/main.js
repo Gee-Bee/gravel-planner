@@ -1,12 +1,17 @@
-// Entry: form (D [km] + start) → planner; errors shown verbatim (§0.3).
-// Start points come from the private YAML config (localStorage, src/config.js).
+// Entry: form (D [km] + bearing) → planner; errors shown verbatim (§0.3).
+// The route = the checked points from the private YAML config (localStorage,
+// src/config.js) in LIST ORDER — the first is the start, the rest are the
+// stops in visit order, and a last point back at the start (duplicate the
+// first row) closes the loop; anything else plans a one-way route.
 // The Configuration section is a live editor of that config: an ordered point
 // list (add / remove / drag to reorder / uncheck) that mirrors every change
 // into the YAML textarea and auto-saves; hand-edited YAML applies on demand.
 // Squares (optional): a non-empty uid enables them; "Fetch squares" pulls the
 // trophy GeoJSON (A4.1) eagerly so the state is ready for planning.
 
-import { planRoutes } from './planner.js';
+import { planRoutes, isLoopRoute } from './planner.js';
+import { distanceKm } from './geometry.js';
+import { ROAD_INFLATION } from './planning.js';
 import { fetchSquadratsGeojson } from './api/squadrats.js';
 import { parseVisitedPolygons } from './squares.js';
 import { loadUid, saveUid } from './storage.js';
@@ -30,7 +35,9 @@ const statusEl = document.getElementById('status');
 const uidEl = document.getElementById('uid');
 const fetchSquaresBtn = document.getElementById('fetch-squares');
 const squaresInfoEl = document.getElementById('squares-info');
-const startEl = document.getElementById('start');
+const routeInfoEl = document.getElementById('route-info');
+const targetKmEl = document.getElementById('target-km');
+const reverseBtn = document.getElementById('route-reverse');
 const configDetailsEl = document.getElementById('config-details');
 const configYamlEl = document.getElementById('config-yaml');
 const saveConfigBtn = document.getElementById('save-config');
@@ -63,7 +70,7 @@ if (uidEl.value) void fetchSquares(false);
 
 configYamlEl.value = loadConfigRaw() || EXAMPLE_YAML;
 renderRows();
-applyStarts();
+applyRoute();
 
 // Mirror the uid store into the YAML once (squares_uid) when they differ —
 // e.g. the uid was typed before the first config was saved.
@@ -89,23 +96,49 @@ uidEl.addEventListener('change', () => {
 // Explicit click = force a fresh download (cache per uid, 24 h, only spares reloads).
 fetchSquaresBtn.addEventListener('click', () => void fetchSquares(true));
 
-function applyStarts() {
-  const prev = startEl.value === '' ? null : points[+startEl.value];
-  const enabled = points.map((p, i) => ({ p, i })).filter(({ p }) => p.enabled);
-  startEl.replaceChildren(...enabled.map(({ p, i }) => new Option(p.label, String(i))));
-  const sel = enabled.find(({ p }) => p === prev) ?? enabled[0];
-  if (sel) startEl.value = String(sel.i);
+// Route preview + button state: the checked points in list order ARE the
+// route (first = start, last = end unless it is back at the start).
+function applyRoute() {
+  const enabled = points.filter((p) => p.enabled);
   const none = !enabled.length;
   planBtn.disabled = none;
   configDetailsEl.open ||= none;
   if (none) {
+    routeInfoEl.textContent = '—';
     setStatus(points.length
       ? 'All points are unchecked — tick one in Configuration to plan.'
-      : 'No start points yet — add one in Configuration below.', true);
+      : 'No points yet — add one in Configuration below.', true);
   } else {
+    routeInfoEl.textContent = routeLabel(enabled);
     setStatus('');
   }
 }
+
+// Label with approximate stop positions: the planner gives the outbound leg
+// D minus everything after a stop, so stop k lands at
+// D − air(stop k → end) ×1.7 — shown as a % of D (the budget arithmetic,
+// before routing; the plan reports the measured route).
+function routeLabel(enabled) {
+  const D = Number(targetKmEl.value) || 0;
+  const end = enabled[enabled.length - 1];
+  const names = enabled.map((p, i) => {
+    const label = p.label || '?';
+    if (i === 0 || i === enabled.length - 1 || D <= 0) return label;
+    const posKm = D - distanceKm(enabled[i], end) * ROAD_INFLATION;
+    return `${label} ~${Math.max(0, Math.round((100 * posKm) / D))}%`;
+  });
+  return `${names.join(' → ')}${isLoopRoute(enabled) ? ' (loop)' : ' (one-way)'}`;
+}
+
+// A D change moves the estimated stop positions, so refresh the preview.
+targetKmEl.addEventListener('input', applyRoute);
+
+// Re-plan in the opposite order: reversing RE-ROUTES (the engine respects
+// one-way roads in the planned direction) — unlike riding the same GPX back.
+reverseBtn.addEventListener('click', () => {
+  poisEditorEl.replaceChildren(...readPointsFromForm().reverse().map(poiRowEl));
+  syncFormToYaml();
+});
 
 // ---- Configuration form: the point list is the editor, the YAML mirrors it ----
 
@@ -160,7 +193,7 @@ function syncFormToYaml() {
   try {
     saveConfigYaml(yaml);
     points = parseConfigYaml(yaml).starts;
-    applyStarts();
+    applyRoute();
     setConfigStatus(`Auto-saved: ${points.length} point(s), ${points.filter((p) => p.enabled).length} enabled.`);
   } catch (err) {
     setConfigStatus(err.message, true);
@@ -282,7 +315,7 @@ saveConfigBtn.addEventListener('click', () => {
     const cfg = saveConfigYaml(configYamlEl.value);
     points = cfg.starts;
     renderRows();
-    applyStarts();
+    applyRoute();
     if (cfg.uid && !uidEl.value.trim()) {
       uidEl.value = cfg.uid;
       saveUid(cfg.uid);
@@ -330,8 +363,8 @@ async function fetchSquares(fresh = false) {
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const targetKm = Number(document.getElementById('target-km').value);
-  const start = points[+startEl.value];
+  const targetKm = Number(targetKmEl.value);
+  const route = points.filter((p) => p.enabled);
   const bearingKey = document.getElementById('bearing').value;
 
   setStatus('Planning…');
@@ -348,7 +381,7 @@ form.addEventListener('submit', async (e) => {
     } catch (err) {
       console.error(err);
     }
-    const result = await planRoutes({ targetKm, start, bearingKey, profile, squares: { ...squaresState } });
+    const result = await planRoutes({ targetKm, route, bearingKey, profile, squares: { ...squaresState } });
     if (result.degenerate) {
       const why = result.collapsedKm != null
         ? `probe collapsed to a ${result.collapsedKm} km ring (mostly out-and-back) — pick another bearing`
@@ -362,11 +395,11 @@ form.addEventListener('submit', async (e) => {
       setStatus(why, true);
       return;
     }
-    const { trackname, measuredKm, nubKm, viaCount, cells, aimedKm, bearing, bearingDeviation, previewUrl } = result;
+    const { trackname, measuredKm, nubKm, viaCount, pinMode, cells, aimedKm, bearing, bearingDeviation, previewUrl } = result;
     const note = [
       nubKm > 0 ? `finger ${nubKm} km spliced` : 'clean probe',
       result.doubledKm > 0 ? `${result.doubledKm} km dead-end doubling kept` : null,
-      `${viaCount} ring vias`,
+      `${viaCount} ring vias${pinMode === 'sparse' ? ' (sparse)' : pinMode === 'dense-fallback' ? ' (sparse rejected → dense)' : ''}`,
       profileNote,
       bearing != null ? `bearing ${bearing}°${bearingDeviation ? ` (${bearingDeviation > 0 ? '+' : ''}${bearingDeviation}° retry)` : ''}` : null,
       aimedKm != null ? `frontier ${aimedKm} km` : null,

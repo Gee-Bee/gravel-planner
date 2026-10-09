@@ -18,15 +18,22 @@ export class HttpError extends Error {
 }
 
 /**
- * B1 request URL — gravel + 4 flags always explicit (B1.4), named via
- * "lon,lat,NAME" (B1.2). opts.plain = omit the via-correction flags to
- * simulate a preview engine (bikerouter ignores them, B3).
+ * B1 request URL, named via "lon,lat,NAME" (B1.2). The UPLOADED profile (B5)
+ * already carries the B1.4 flags (prefer_unpaved/avoid_noise default TRUE in
+ * CHAT_BROUTER_PROFILE.md), so URL params would only duplicate it — they are
+ * sent for STOCK gravel only (the upload-failure fallback, whose text has the
+ * quaelnix defaults). opts.plain drops the via-correction flags there too
+ * (preview parity — bikerouter ignores profile:* params, B3); for a custom
+ * id plain is a no-op (no flags either way).
  */
 export function buildUrl(points, opts = {}) {
   const lonlats = points.map((p) => `${p.lon},${p.lat}`).join('|');
-  const flags = opts.plain
-    ? Object.fromEntries(Object.entries(PROFILE_PARAMS).filter(([k]) => !k.startsWith('profile:correctMisplaced')))
-    : PROFILE_PARAMS;
+  const stock = (opts.profile ?? PROFILE) === PROFILE;
+  const flags = !stock
+    ? {}
+    : opts.plain
+      ? Object.fromEntries(Object.entries(PROFILE_PARAMS).filter(([k]) => !k.startsWith('profile:correctMisplaced')))
+      : PROFILE_PARAMS;
   const params = new URLSearchParams({
     lonlats,
     profile: opts.profile ?? PROFILE,
@@ -71,23 +78,20 @@ export function trackLengthKm(geojson) {
 }
 
 /**
- * B3 — preview link: ;-separated lonlats, /standard layer, profile + the two
- * routing flags in the URL (bikerouter parses `profile:*` from the hash and
- * forwards them to its engine — verified). opts.profile should be the custom
- * id uploaded to bikerouter's own engine (see profile.js): the link then
- * opens routed with the riding profile, no manual upload/selection; without
- * it stock gravel is forced (bikerouter otherwise reuses the last profile —
- * often road bike).
+ * B3 — preview link: ;-separated lonlats, /standard layer, profile only —
+ * no `profile:*` params: bikerouter IGNORES them (measured — its engine call
+ * carries only profile=) and the uploaded .brf (B5) carries the flag
+ * defaults anyway, so params would be dead duplication. opts.profile should
+ * be the custom id uploaded to bikerouter's own engine (see profile.js): the
+ * link then opens routed with the riding profile, no manual upload or
+ * selection; without it stock gravel is forced (bikerouter otherwise reuses
+ * the last profile — often road bike).
  */
 export function buildPreviewUrl(points, opts = {}) {
   const lonlats = points.map((p) => `${p.lon},${p.lat}`).join(';');
   const zoom = opts.zoom ?? 11;
   const first = points[0];
-  const params = new URLSearchParams({
-    profile: opts.profile ?? 'gravel',
-    'profile:prefer_unpaved_paths': '1',
-    'profile:avoid_noise': '1',
-  });
+  const params = new URLSearchParams({ profile: opts.profile ?? 'gravel' });
   return (
     `https://bikerouter.de/#map=${zoom}/${first.lat}/${first.lon}/standard` +
     `&lonlats=${lonlats}&${params.toString()}`

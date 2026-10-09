@@ -13,7 +13,9 @@ export const GRID_N = 16384;
 export const DLON = 360 / GRID_N; // 0.02197265625°
 
 // B1.4 — stock "gravel" is the FALLBACK when the riding-profile upload (B5,
-// src/profile.js) fails; the flags stay explicit in every routing URL.
+// src/profile.js) fails; only THAT fallback URL carries the flags (the
+// uploaded profile has prefer_unpaved/avoid_noise baked in — URL params for
+// a custom id would duplicate the profile text).
 export const PROFILE = 'gravel';
 export const PROFILE_PARAMS = Object.freeze({
   'profile:prefer_unpaved_paths': '1',
