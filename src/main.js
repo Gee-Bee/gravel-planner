@@ -461,6 +461,7 @@ form.addEventListener('submit', async (e) => {
     }
     const { trackname, measuredKm, nubKm, viaCount, pinMode, cells, aimedKm, bearing, bearingDeviation, previewUrl } = result;
     const note = [
+      result.relaxed ? 'relaxed gates — no candidate passed strictly' : null,
       nubKm > 0 ? `finger ${nubKm} km spliced` : 'clean probe',
       result.doubledKm > 0 ? `${result.doubledKm} km dead-end doubling kept` : null,
       `${viaCount} ring vias${pinMode === 'sparse' ? ' (sparse)' : pinMode === 'dense-fallback' ? ' (sparse rejected → dense)' : ''}`,

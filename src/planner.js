@@ -28,6 +28,7 @@ import {
   distanceKm,
 } from './geometry.js';
 import { countNewCells, visitedCellsInBbox } from './squares.js';
+import { fetchScenicSpots } from './api/osm.js';
 import {
   buildUrl,
   fetchRouteGeojson,
@@ -94,11 +95,15 @@ const RING_MIN_FACTOR = 0.5;
 // Frontier reach: a D-route can touch a frontier up to ~D/2 out (leg there
 // still leaves room for the loop); 1.4× slack for the closing leg.
 const FRONTIER_REACH = 1.4;
+// Scenery (OSM overlay): a spot within this air distance of the ring counts
+// towards the probe's scenic score.
+const SCENIC_REACH_KM = 1.5;
 
 // Fetch budget: up to 5 probe bearings + up to 3 ranked deliveries, each a
-// sparse attempt then the dense fallback (+1 stub retry each) → ≤ 16 calls.
-// §0.4 (3–4 min wall clock) is the real limit; this guards the call count.
-const MAX_FETCHES = 17;
+// sparse attempt then the dense fallback (+1 stub retry each) → ≤ 17 calls,
+// plus a relaxed fallback (≤2 candidates, no stub retry) → 21. §0.4 (3–4 min
+// wall clock) is the real limit; this guards the call count.
+const MAX_FETCHES = 22;
 
 const KLAT = 110.57;
 const kxAt = (lat) => 111.32 * Math.cos((lat * Math.PI) / 180);
@@ -176,20 +181,36 @@ export function interiorDoubledKm(coords, start) {
  */
 export function spliceNub(coords, start) {
   const runs = nubRuns(coords, start);
-  if (runs.length === 0) return { coords, junctionIdx: null, nubKm: 0 };
+  if (runs.length === 0) {
+    return { coords, keepIdx: coords.map((_, i) => i), junctionIdx: null, nubKm: 0 };
+  }
   const { cum } = planar(coords, start);
   const next = [];
+  const keepIdx = [];
   let keep = 0;
+  const push = (i) => { next.push(coords[i]); keepIdx.push(i); };
   for (const r of runs) {
-    for (let i = keep; i < r.i0; i++) next.push(coords[i]);
+    for (let i = keep; i < r.i0; i++) push(i);
     keep = r.i1 + 1;
   }
-  for (let i = keep; i < coords.length; i++) next.push(coords[i]);
+  for (let i = keep; i < coords.length; i++) push(i);
   return {
     coords: next,
+    keepIdx,
     junctionIdx: runs[0].i0 - 1,
     nubKm: +runs.reduce((s, r) => s + cum[r.i1] - cum[r.i0], 0).toFixed(2),
   };
+}
+
+/**
+ * The outbound leg THROUGH the splice: the cut is found on the probe (the
+ * engine passes exactly through the stop) and mapped onto the kept geometry —
+ * on the spliced array alone a stop sitting inside a dropped corridor left an
+ * early incidental vertex as the cut and pinned NO vias (measured D=60/E:
+ * leg 1.3 km, 0 vias).
+ */
+export function legThroughSplice(spliced, cutOnProbe) {
+  return spliced.coords.filter((_, k) => spliced.keepIdx[k] <= cutOnProbe);
 }
 
 /**
@@ -405,6 +426,41 @@ export async function planRoutes(params) {
     ? aimAtFrontier(start, squares.polygons, wanderKm, sector)
     : null;
 
+  // Scenery overlay (best effort): the engine knows no greenery or tourism at
+  // all, so the attractions/parks/peaks in the route bbox rank the probes
+  // (tiebreak after fresh squares) and land in the route note.
+  const scenicSpots = await fetchScenicSpots(bboxAroundKm(start, params.targetKm));
+  const scenicAt = (coords) => {
+    if (!scenicSpots.length) return null;
+    const { P } = planar(coords, start);
+    const kx = kxAt(start.lat);
+    let spots = 0;
+    for (const s of scenicSpots) {
+      const sx = (s.lon - start.lon) * kx;
+      const sy = (s.lat - start.lat) * KLAT;
+      let best = Infinity;
+      for (let i = 0; i < P.length; i++) {
+        const d = Math.hypot(P[i].x - sx, P[i].y - sy);
+        if (d < best) { best = d; if (best <= SCENIC_REACH_KM) break; }
+      }
+      if (best <= SCENIC_REACH_KM) spots++;
+    }
+    return spots;
+  };
+  // The densest scenic sector around the start — auto without squares aims at
+  // it (Brouter alone never picks a road for its surroundings).
+  const scenicBearing = () => {
+    const buckets = new Array(16).fill(0);
+    for (const s of scenicSpots) {
+      if (distanceKm(start, s) > params.targetKm) continue;
+      const deg = ((bearingDeg(start, s) % 360) + 360) % 360;
+      buckets[Math.round(deg / 22.5) % 16]++;
+    }
+    let best = 0;
+    for (let i = 1; i < buckets.length; i++) if (buckets[i] > buckets[best]) best = i;
+    return buckets[best] > 0 ? best * 22.5 : null;
+  };
+
   let fetches = 0;
   const fetchCounted = async (pts, opts = {}) => {
     if (++fetches > MAX_FETCHES) throw new Error('fetch budget exceeded (§0.4)');
@@ -423,7 +479,7 @@ export async function planRoutes(params) {
     const { cum: ringCum } = planar(ring.coords, start);
     // Pins hold the OUTBOUND leg only (start → first stop); the stop hops
     // ride free — the verify gate still watches the whole route.
-    const leg1 = ring.coords.slice(0, outboundCut(ring.coords, start, stops[0]) + 1);
+    const leg1 = legThroughSplice(ring, outboundCut(probeCoords, start, stops[0]));
     return {
       brg,
       anchors,
@@ -442,6 +498,7 @@ export async function planRoutes(params) {
       freshInho: squares?.polygonsInho?.length
         ? countNewCells(ring.coords, squares.polygonsInho).fresh
         : null,
+      scenic: scenicAt(ring.coords),
     };
   };
 
@@ -454,13 +511,20 @@ export async function planRoutes(params) {
     ...extra,
   } });
 
+  const gateFails = (doubledKm, driftKm) =>
+    doubledKm > DOUBLED_TOL_KM || driftKm == null || Math.abs(driftKm) > PARITY_TOL_KM;
+
+  const pointsOf = (vias) => [start, ...vias, ...stops];
+
   // Deliver a probed route: SPARSE pins first (E — few pins leave the engine
   // room to choose roads by the profile between them), the dense set as the
   // fallback when the verify gate rejects the sparse attempt. ok=false = the
   // gate rejected BOTH (the engine, not the map, decides rideability).
-  const deliver = async (pre) => {
+  // acceptAny = the relaxed fallback: the gates are still MEASURED (and the
+  // result flagged) but never reject — a route beats no route.
+  const deliver = async (pre, acceptAny = false) => {
 
-    if (pre.ringKm < params.targetKm * RING_MIN_FACTOR) {
+    if (!acceptAny && pre.ringKm < params.targetKm * RING_MIN_FACTOR) {
       return degenerate(pre, { collapsedKm: pre.ringKm });
     }
 
@@ -471,9 +535,8 @@ export async function planRoutes(params) {
       });
     }
 
-    const pointsOf = (vias) => [start, ...vias, ...stops];
     // One attempt (plain = the preview engine's routing): drop via stubs
-    // (dead-end tips) once, then gate — doubled strands + ring parity.
+    // (dead-end tips) once, then measure — doubled strands + ring parity.
     const attempt = async (vias) => {
       let activeVias = vias;
       let delivery = await fetchCounted(pointsOf(activeVias), { plain: true, profile });
@@ -486,15 +549,22 @@ export async function planRoutes(params) {
         deliveryCoords = extractCoords(delivery.geojson);
         deliveryKm = trackLengthKm(delivery.geojson);
         if (stubVias(deliveryCoords, activeVias, start, new Set()).length > 0) {
-          return { fail: { stubs: stubs.length }, activeVias, delivery };
+          // Relaxed mode keeps the stubs — it reports the route it has.
+          return {
+            ok: acceptAny,
+            fail: { stubs: stubs.length },
+            activeVias, delivery, deliveryCoords, deliveryKm,
+            doubledKm: null, driftKm: null,
+          };
         }
       }
       const doubledKm = interiorDoubledKm(deliveryCoords, start);
       const driftKm = deliveryKm == null ? null : +(deliveryKm - pre.ringKm).toFixed(2);
-      if (doubledKm > DOUBLED_TOL_KM || driftKm == null || Math.abs(driftKm) > PARITY_TOL_KM) {
-        return { fail: { doubledKm, driftKm }, activeVias, delivery };
-      }
-      return { ok: true, activeVias, delivery, deliveryCoords, deliveryKm, doubledKm, driftKm };
+      return {
+        ok: acceptAny || !gateFails(doubledKm, driftKm),
+        fail: { doubledKm, driftKm },
+        activeVias, delivery, deliveryCoords, deliveryKm, doubledKm, driftKm,
+      };
     };
 
     const sparse = pre.sparseVias ?? [];
@@ -506,7 +576,7 @@ export async function planRoutes(params) {
     for (const [vias, mode] of tries) {
       const att = await attempt(vias);
       if (att.ok) {
-        const { activeVias, deliveryCoords, deliveryKm, doubledKm } = att;
+        const { activeVias, deliveryCoords, deliveryKm, doubledKm, driftKm } = att;
 
         // Squares report (optional): coarse grid drives the aim, the fine grid
         // (squadratinhos) rides along in the report — a ring can pick zero new
@@ -529,8 +599,9 @@ export async function planRoutes(params) {
           ringKm: pre.ringKm,
           nubKm: pre.splicedKm,
           doubledKm,
-          viaCount: activeVias.length,
-          pinMode: useSparse && mode === 'dense' ? 'dense-fallback' : mode,
+      viaCount: activeVias.length,
+      scenic: pre.scenic,
+      pinMode: useSparse && mode === 'dense' ? 'dense-fallback' : mode,
           cells,
           aimedKm: aim ? aim.dKm : null,
           bearingDeviation: aim ? Math.round(pre.brg - aim.bearingDeg) : null,
@@ -538,6 +609,8 @@ export async function planRoutes(params) {
           // Direct engine link — built, not fetched; a custom id needs no URL
           // flags (the uploaded profile carries them), stock fallback gets B1.4.
           b1Url: buildUrl(pointsOf(activeVias), { profile }),
+          // Relaxed fallback: the gates were measured but not enforced.
+          ...(gateFails(doubledKm, driftKm) ? { relaxed: true } : {}),
         } };
       }
       failed = att;
@@ -560,16 +633,22 @@ export async function planRoutes(params) {
     ? frontierAnchors(start, squares.polygons, wanderKm, sector)
     : null;
   let last = null;
+  let frontierPre = null;
   if (frontier) {
-    const r = await deliver(await probeBearing(frontier.bearingDeg, frontier.anchors));
+    frontierPre = await probeBearing(frontier.bearingDeg, frontier.anchors);
+    const r = await deliver(frontierPre);
     if (r.ok && ((r.result.cells?.fresh ?? 0) > 0 || (r.result.cells?.inho?.fresh ?? 0) > 0)) return r.result;
     last = r;
   }
   const manualBrg = sector ?? BEARINGS.n;
+  // Varied fan: only the OUTER probes drift per run (inside the ±45° sector —
+  // the requested bearing itself stays exact), so a collapsed geometry
+  // explores a different corridor next run; the note reports the bearing ridden.
+  const outer = () => 30 + Math.random() * 15;
   const bearings = manual
-    ? [manualBrg, manualBrg - 45, manualBrg + 45]
+    ? [manualBrg, manualBrg - outer(), manualBrg + outer()]
     : frontier
-      ? [aim.bearingDeg - 45, aim.bearingDeg + 45]
+      ? [aim.bearingDeg - outer(), aim.bearingDeg + outer()]
       : hasSquares
         ? [...new Set([aim ? aim.bearingDeg : null, 0, 90, 180, 270].filter((b) => b != null))]
         : [BEARINGS.n];
@@ -580,6 +659,18 @@ export async function planRoutes(params) {
   );
   for (const pre of probed.slice(0, frontier ? 2 : 3)) {
     const r = await deliver(pre);
+    if (r.ok) return r.result;
+    last = r;
+  }
+  // Fallback: every candidate was rejected — accept the largest ring with the
+  // gates relaxed instead of failing the run (a route beats "pick another
+  // bearing"; measured D=60/E: the 27.6 km ring blocked every delivery before
+  // a single one had even been fetched).
+  const spare = [...probed, ...(frontierPre ? [frontierPre] : [])]
+    .filter((c) => c.vias.length > 0)
+    .sort((a, b) => b.ringKm - a.ringKm);
+  for (const pre of spare.slice(0, 2)) {
+    const r = await deliver(pre, true);
     if (r.ok) return r.result;
     last = r;
   }
