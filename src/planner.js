@@ -268,12 +268,25 @@ function getScenicBearing(start, targetKm, scenicSpots) {
   return buckets[best] > 0 ? best * 22.5 : null;
 }
 
-function attachScenicNames(viasList, scenicSpots) {
+// Physically pulls a via onto a nearby POI's exact coordinates to force routing through it.
+// Prevents pulling multiple vias to the same POI using a Set.
+function pullViasToScenic(viasList, scenicSpots) {
   if (!scenicSpots?.length) return viasList;
+  const PULL_MAX_KM = 1.0;
+  const usedSpots = new Set();
   return viasList.map((v) => {
     if (v.name) return v;
-    const close = scenicSpots.find((s) => distanceKm(v, s) <= SCENIC_REACH_KM);
-    return close ? { ...v, name: close.name } : v;
+    let bestSpot = null, bestDist = PULL_MAX_KM;
+    for (const s of scenicSpots) {
+      if (usedSpots.has(s.name)) continue;
+      const d = distanceKm(v, s);
+      if (d < bestDist) { bestDist = d; bestSpot = s; }
+    }
+    if (bestSpot) {
+      usedSpots.add(bestSpot.name);
+      return { lon: bestSpot.lon, lat: bestSpot.lat, name: bestSpot.name };
+    }
+    return v;
   });
 }
 
@@ -300,10 +313,19 @@ export function getDiverseFrontiers(start, polygons, targetKm, sector = null) {
     }
     inReach.push({ dKm: d, bearingDeg: ((b % 360) + 360) % 360, cell: c });
   }
+  if (inReach.length === 0) return [];
 
   inReach.sort((a, b) => a.dKm - b.dKm);
+  const pool = inReach.slice(0, 15);
+  
+  // Shuffle the pool to ensure different clicks yield different exploration routes
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+
   const selected = [];
-  for (const f of inReach) {
+  for (const f of pool) {
     if (!selected.some(s => Math.abs(((s.bearingDeg - f.bearingDeg + 540) % 360) - 180) < 25)) {
       selected.push(f);
       if (selected.length >= 3) break;
@@ -375,8 +397,9 @@ export async function planRoutes(params) {
       ringCoords: ring.coords,
       splicedKm: ring.nubKm,
       ringKm: +ringCum[ringCum.length - 1].toFixed(2),
-      vias: ringVias(leg1, start),
-      sparseVias: ringVias(leg1, start, RING_VIA_SPARSE_STEP_KM),
+      // Physically drag the generated vias to nearby scenic POIs
+      vias: pullViasToScenic(ringVias(leg1, start), scenicSpots),
+      sparseVias: pullViasToScenic(ringVias(leg1, start, RING_VIA_SPARSE_STEP_KM), scenicSpots),
       fresh, freshInho, scenic,
       score: fresh * 10000 + freshInho * 10 + scenic * 100
     };
@@ -436,8 +459,6 @@ export async function planRoutes(params) {
           inho: squares.polygonsInho?.length ? countNewCells(att.deliveryCoords, squares.polygonsInho) : null,
         } : null;
 
-        const namedVias = attachScenicNames(att.activeVias, scenicSpots);
-
         return { ok: true, result: {
           start, trackname,
           bearing: Math.round(((pre.brg % 360) + 360) % 360),
@@ -446,14 +467,14 @@ export async function planRoutes(params) {
           ringKm: pre.ringKm,
           nubKm: pre.splicedKm,
           doubledKm: att.doubledKm,
-          viaCount: namedVias.length,
+          viaCount: att.activeVias.length,
           scenic: pre.scenic,
           pinMode: useSparse && mode === 'dense' ? 'dense-fallback' : mode,
           cells,
           aimedKm: null,
           bearingDeviation: null,
-          previewUrl: buildPreviewUrl(pointsOf(namedVias), { profile }),
-          b1Url: buildUrl(pointsOf(namedVias), { profile }),
+          previewUrl: buildPreviewUrl(pointsOf(att.activeVias), { profile }),
+          b1Url: buildUrl(pointsOf(att.activeVias), { profile }),
           ...(gateFails(att.doubledKm, att.driftKm) ? { relaxed: true } : {}),
         }};
       }
