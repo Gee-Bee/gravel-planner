@@ -61,6 +61,7 @@
     import { cellIndex, cellCenter, cellKey, computeFrontier, bboxAroundKm } from './src/geometry.js';
     import { loadUid } from './src/storage.js';
     import { getStarts } from './src/config.js';
+    import { getRidingProfileId } from './src/profile.js';
 
     // Canvas renderer: SVG chokes on thousands of paths (froze the tab); canvas
     // draws the same in one pass. Frontier is scanned LOCALLY (route/start bbox
@@ -177,7 +178,8 @@
       const lonlats = [...url.matchAll(/(\d+\.\d+),(\d+\.\d+)/g)].map((m) => [+m[1], +m[2]]);
       if (lonlats.length < 2) { info('no lonlats in the URL'); return; }
       info('routing…');
-      const { geojson } = await fetchRouteGeojson(lonlats.map(([lon, lat]) => ({ lon, lat })), { plain: true });
+      const profile = await getRidingProfileId().catch(() => null);
+      const { geojson } = await fetchRouteGeojson(lonlats.map(([lon, lat]) => ({ lon, lat })), { plain: true, profile });
       const coords = extractCoords(geojson);
       gRoute.clearLayers();
       L.geoJSON(geojson, { style: { color: '#f5b301', weight: 4, opacity: 0.9 } }).addTo(gRoute);
