@@ -340,11 +340,11 @@ export function stubVias(deliveryCoords, vias, start, exempt = new Set()) {
  * still aims at fresh squares, just inside its own quadrant (null = no
  * squares data, no frontier in the sector → the bearing itself decides).
  */
-export function aimAtFrontier(start, polygons, targetKm, sector = null) {
+export function aimAtFrontier(start, polygons, targetKm, sector = null, randomize = false) {
   const bbox = bboxAroundKm(start, (targetKm / 2) * FRONTIER_REACH);
   const visited = visitedCellsInBbox(polygons, bbox);
   if (visited.size === 0) return null;
-  let best = null;
+  const inReach = [];
   for (const key of computeFrontier(visited, bbox)) {
     const [i, j] = key.split(':').map(Number);
     const c = cellCenter(i, j);
@@ -353,8 +353,11 @@ export function aimAtFrontier(start, polygons, targetKm, sector = null) {
       let dev = Math.abs(((bearingDeg(start, c) - sector + 540) % 360) - 180);
       if (dev > 45) continue;
     }
-    if (!best || d < best.dKm) best = { dKm: d, bearing: bearingDeg(start, c), cell: c };
+    inReach.push({ dKm: d, bearing: bearingDeg(start, c), cell: c });
   }
+  if (!inReach.length) return null;
+  inReach.sort((a, b) => a.dKm - b.dKm);
+  const best = !randomize ? inReach[0] : inReach.slice(0, 5)[Math.floor(Math.random() * Math.min(5, inReach.length))];
   return best && {
     dKm: +best.dKm.toFixed(1),
     bearingDeg: +(((best.bearing + 360) % 360)).toFixed(1),
@@ -423,7 +426,7 @@ export async function planRoutes(params) {
     : manual ? BEARINGS[params.bearingKey] ?? BEARINGS.n : null;
   const hasSquares = !!squares?.polygons?.length;
   const aim = hasSquares
-    ? aimAtFrontier(start, squares.polygons, wanderKm, sector)
+    ? aimAtFrontier(start, squares.polygons, wanderKm, sector, true)
     : null;
 
   // Scenery overlay (best effort): the engine knows no greenery or tourism at
@@ -537,6 +540,18 @@ export async function planRoutes(params) {
 
     // One attempt (plain = the preview engine's routing): drop via stubs
     // (dead-end tips) once, then measure — doubled strands + ring parity.
+    const attachScenicNames = (viasList) => {
+      if (!scenicSpots.length) return viasList;
+      return viasList.map((v) => {
+        if (v.name) return v;
+        const close = scenicSpots.find((s) => Math.hypot(
+          (v.lon - s.lon) * 111.32 * Math.cos((s.lat * Math.PI) / 180),
+          (v.lat - s.lat) * KLAT,
+        ) <= SCENIC_REACH_KM);
+        return close ? { ...v, name: close.name } : v;
+      });
+    };
+
     const attempt = async (vias) => {
       let activeVias = vias;
       let delivery = await fetchCounted(pointsOf(activeVias), { plain: true, profile });
@@ -589,6 +604,7 @@ export async function planRoutes(params) {
                 : null,
             }
           : null;
+        const namedVias = attachScenicNames(activeVias);
 
         return { ok: true, result: {
           start,
@@ -599,16 +615,16 @@ export async function planRoutes(params) {
           ringKm: pre.ringKm,
           nubKm: pre.splicedKm,
           doubledKm,
-      viaCount: activeVias.length,
+          viaCount: namedVias.length,
       scenic: pre.scenic,
       pinMode: useSparse && mode === 'dense' ? 'dense-fallback' : mode,
           cells,
           aimedKm: aim ? aim.dKm : null,
           bearingDeviation: aim ? Math.round(pre.brg - aim.bearingDeg) : null,
-          previewUrl: buildPreviewUrl(pointsOf(activeVias), { profile }),
+          previewUrl: buildPreviewUrl(pointsOf(namedVias), { profile }),
           // Direct engine link — built, not fetched; a custom id needs no URL
           // flags (the uploaded profile carries them), stock fallback gets B1.4.
-          b1Url: buildUrl(pointsOf(activeVias), { profile }),
+          b1Url: buildUrl(pointsOf(namedVias), { profile }),
           // Relaxed fallback: the gates were measured but not enforced.
           ...(gateFails(doubledKm, driftKm) ? { relaxed: true } : {}),
         } };
@@ -629,35 +645,27 @@ export async function planRoutes(params) {
   // direction fan — a single shot fails the gate for 3 of 4 directions at
   // D=80, measured) ranked by fresh cells, delivered until the gate passes
   // one. Auto without squares = N only — same algorithm, visits ignored.
-  const frontier = hasSquares
-    ? frontierAnchors(start, squares.polygons, wanderKm, sector)
-    : null;
-  let last = null;
-  let frontierPre = null;
-  if (frontier) {
-    frontierPre = await probeBearing(frontier.bearingDeg, frontier.anchors);
-    const r = await deliver(frontierPre);
-    if (r.ok && ((r.result.cells?.fresh ?? 0) > 0 || (r.result.cells?.inho?.fresh ?? 0) > 0)) return r.result;
-    last = r;
-  }
-  const manualBrg = sector ?? BEARINGS.n;
-  // Varied fan: only the OUTER probes drift per run (inside the ±45° sector —
-  // the requested bearing itself stays exact), so a collapsed geometry
-  // explores a different corridor next run; the note reports the bearing ridden.
-  const outer = () => 30 + Math.random() * 15;
-  const bearings = manual
-    ? [manualBrg, manualBrg - outer(), manualBrg + outer()]
-    : frontier
-      ? [aim.bearingDeg - outer(), aim.bearingDeg + outer()]
-      : hasSquares
-        ? [...new Set([aim ? aim.bearingDeg : null, 0, 90, 180, 270].filter((b) => b != null))]
-        : [BEARINGS.n];
+  const baseBearing = sector ?? (aim ? aim.bearingDeg : (scenicBearing() ?? BEARINGS.n));
+  const outer = () => 20 + Math.random() * 20;
+  const bearings = [
+    baseBearing,
+    ((baseBearing - outer()) % 360 + 360) % 360,
+    ((baseBearing + outer()) % 360 + 360) % 360,
+  ];
+
   const probed = [];
-  for (const brg of bearings) probed.push(await probeBearing(brg));
-  probed.sort(
-    (a, b) => (b.fresh ?? 0) - (a.fresh ?? 0) || (b.freshInho ?? 0) - (a.freshInho ?? 0),
-  );
-  for (const pre of probed.slice(0, frontier ? 2 : 3)) {
+  for (const brg of bearings) {
+    const fa = hasSquares ? frontierAnchors(start, squares.polygons, wanderKm, brg) : null;
+    probed.push(await probeBearing(brg, fa?.anchors ?? null));
+  }
+  probed.sort((a, b) => {
+    const scoreA = (a.fresh ?? 0) * 10000 + (a.freshInho ?? 0) * 10 + (a.scenic ?? 0) * 100;
+    const scoreB = (b.fresh ?? 0) * 10000 + (b.freshInho ?? 0) * 10 + (b.scenic ?? 0) * 100;
+    return scoreB - scoreA;
+  });
+
+  let last = null;
+  for (const pre of probed) {
     const r = await deliver(pre);
     if (r.ok) return r.result;
     last = r;
@@ -666,7 +674,7 @@ export async function planRoutes(params) {
   // gates relaxed instead of failing the run (a route beats "pick another
   // bearing"; measured D=60/E: the 27.6 km ring blocked every delivery before
   // a single one had even been fetched).
-  const spare = [...probed, ...(frontierPre ? [frontierPre] : [])]
+  const spare = probed
     .filter((c) => c.vias.length > 0)
     .sort((a, b) => b.ringKm - a.ringKm);
   for (const pre of spare.slice(0, 2)) {

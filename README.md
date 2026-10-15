@@ -31,7 +31,7 @@ Gravel route planning from a requested distance D, with GPX export (stages A–D
 ## Run locally
 
 ```bash
-nix run nixpkgs#darkhttpd -- . --port 8080 --header 'Cache-Control: no-cache'
+nix run nixpkgs#darkhttpd -- . --port 8123 --header 'Cache-Control: no-cache'
 ```
 
 Open http://localhost:8080/ (ES modules require HTTP — not `file://`). The
@@ -89,13 +89,13 @@ Save**. Every push to `main` republishes in ~1–2 min at
 Pages serves modules with ~10 min caching — after a deploy, hard-refresh
 (Ctrl+Shift+R) if anything looks stale.
 
-## Pipeline (v6.1)
+## Pipeline (Unified v7.3)
 
-- **Squares (optional)** — a non-empty uid enables them: trophy GeoJSON via 2 unauthenticated GETs (A4.1), visited polygons = ring[0] outer + rings[1..] holes (A4.2); fetched eagerly on load, refreshed on button/uid change, cached per session. Both grids parse: **squadrats** (16384², aiming + report) and **squadratinhos** (131072², report + tiebreak) — the browser overlay in the screenshot is the Squadrats extension, not a bikerouter layer.
-- **A** — visited polygons ready (Squadrats API, A4.1).
-- **B** — visited cells (cell centers vs the visited union, local bbox around the start only) → frontier = unvisited cells 4-adjacent to visited ones (A4.6).
-- **C** — bearing at the NEAREST frontier cell (bearing "Auto (new squares)", default) → radial lollipop anchors ≈ D; the compass wheel sets ANY manual angle — it is a constraint, not an override: the aim goes to the nearest frontier within ±45° of the wheel angle (fallback: its own ±45° fan); without squares the algorithm runs the same, just ignores visits (auto → N, manual = plain direction fan).
-- **D** — BRouter GeoJSON (B1.4: the flags live IN the uploaded profile — a custom-id request carries no `profile:*` params, only the stock fallback URL still sends them; named via, B1.2): the delivery pins only the **outbound leg** — SPARSE vias first (5.4 km — few pins leave the engine room to pick roads by the profile between them; measured on D=50: a sparse set reproduced the ring exactly, 40.9 km / 17.3 km paved identical to the dense set), and the dense 1.8 km set is added only when the verify gate (no doubled strands, ring parity ≤3 km, no via stubs) rejects the sparse attempt; stop hops ride free. Bikerouter link carries the points; new-squares estimate from the delivery geometry on BOTH grids (cells touched where no point is visited).
+1. **Celowanie i eksploracja:** Kierunek wyznaczany jest na podstawie frontu nieodwiedzonych kwadratów (lub koła kompasu / rejonu widokowego). Zawsze obecny jest kontrolowany dryf losowy (wybór z puli najbliższych komórek oraz fluktuacja kątowa ±8°), dzięki czemu ponowne planowanie proponuje inne warianty.
+2. **Sondowanie i oczyszczanie (Probe & Splice):** Silnik BRouter bada 3 korytarze. Z geometrii próbnej automatycznie wycinane są zdublowane ślepe odnogi (`spliceNub`), tworząc czysty ring.
+3. **Wspólny scoring:** Warianty oceniane są wspólną funkcją oceny łączącą nowe kwadraty (squadrats + squadratinhos) oraz zagęszczenie atrakcji turystycznych i punktów widokowych z OSM.
+4. **Dociąganie do POI i punkty pośrednie:** Punkty via wyznaczane są na wyjeżdżonym ringu (początkowo rzadkie co ~5.4 km). Punkty w zasięgu ≤800 m od atrakcji OSM otrzymują ich nazwy jako Course Points. Wyklucza to nawroty w ślepych uliczkach, dociągając trasę do POI bez sakiewek.
+5. **Bramka jakości (Verify Gate):** Trasa jest akceptowana tylko wtedy, gdy nie dubluje dróg, trzyma zadany dystans D i nie tworzy kikucików na nawrotach (`stubVias`).
 - **Riding profile (B5)** — the planner routes EVERY request (probe, ring, delivery) with the user's riding profile: `CHAT_BROUTER_PROFILE.md` (delta of quaelnix's gravel.brf — Antilights, NOBRUSH, level-crossing 150, plus `prefer_unpaved_paths` + `avoid_noise` default TRUE so the preview link matches the planner) is uploaded to bikerouter's own engine (`POST /brouter-engine/brouter/profile` → `custom_<id>`, CORS-open — the endpoint bikerouter's own UI uses) and passed as `profile=`. The id is cached in localStorage **with the fnv1a revision of the .brf** (an edit re-uploads automatically) and re-verified with a routing HEAD before every reuse (200 alive / 500 evicted → re-upload). Routing URLs and the preview link carry NO `profile:*` params for a custom id — the profile text is the single source of truth (no duplication); the stock fallback keeps the B1.4 URL flags. The sparse pins hold the route shape (no U-turns), while the roads are picked by the SAME cost function the user rides with in bikerouter — the preview link carries the `custom_` id, so the opened route is computed with the riding profile, no manual upload/selection (bikerouter ignores `profile:*` URL params — measured — hence the flag defaults live in the profile itself). Upload failure → fallback to stock `gravel` + URL flags, reported in the route note.
 - HTTP 4xx/429/5xx → exact URL in the UI, no retry (§0.3).
 - **Dev map** (`map.html`) — the Squadrats browser extension cannot be installed in the embedded preview (UA-gated Web Store, no chrome://extensions), so this page replicates it: visited unions (both grids), frontier, and any bikerouter link pasted into the bar with fresh touched cells highlighted; reuses the app modules, so it shows exactly what the planner counts.
