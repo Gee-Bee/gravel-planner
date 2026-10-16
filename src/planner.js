@@ -3,7 +3,7 @@
 // the rest are stops in visit order; a stop back at the start (a single point,
 // or the first row duplicated last) closes the loop, anything else is one-way.
 
-import { LOOP_TIP_KM, ROAD_INFLATION, planAnchorsRadial } from './planning.js';
+import { LOOP_TIP_KM, ROAD_INFLATION, planAnchorsRadial } from './route-analyzer.js';
 import { PROFILE } from './constants.js';
 import {
   bboxAroundKm,
@@ -317,7 +317,7 @@ export function getDiverseFrontiers(start, polygons, targetKm, sector = null) {
 
   inReach.sort((a, b) => a.dKm - b.dKm);
   const pool = inReach.slice(0, 15);
-  
+
   // Shuffle the pool to ensure different clicks yield different exploration routes
   for (let i = pool.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));

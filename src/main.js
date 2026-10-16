@@ -11,7 +11,7 @@
 
 import { planRoutes, isLoopRoute } from './planner.js';
 import { distanceKm } from './geometry.js';
-import { ROAD_INFLATION } from './planning.js';
+import { ROAD_INFLATION } from './route-analyzer.js';
 import { fetchSquadratsGeojson } from './api/squadrats.js';
 import { parseVisitedPolygons } from './squares.js';
 import { loadUid, saveUid } from './storage.js';

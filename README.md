@@ -13,9 +13,9 @@ Gravel route planning from a requested distance D, with GPX export (stages A–D
 ├── test.html           # static tests (no npm): serve + open — planner + squares parsing
 ├── src/
 │   ├── main.js         # entry: config bootstrap, form → planner, honest error reporting
-│   ├── planner.js      # v7.2: route chain from the config (first = start, loop = duplicated first) → frontier-aimed outbound probe (plain) → splice finger → SPARSE ring vias, dense fallback → verify → new-squares estimate
+│   ├── planner.js      # v7.3: unified pipeline (Frontier/Scenic/Compass) -> 3 variants -> Probe -> Splice -> Score -> Delivery
 │   ├── profile.js      # B5 — riding profile upload to bikerouter (custom_<id> cached with the .brf revision + HEAD liveness); stock gravel fallback
-│   ├── planning.js     # Etap C step 1 — radial lollipop anchors, A5.3/A5.5 spur snap
+│   ├── route-analyzer.js # topology analysis, nubRuns, spliceNub, stubVias, loop geometry math
 │   ├── config.js       # private start points: 2-level YAML parser + localStorage (nothing private in the repo)
 │   ├── constants.js    # A4.1 Squadrats API, A4.3 grid, B1.4 profile
 │   ├── geometry.js     # A4.3/A4.4 grid math (mercY, cellIndex/cellCenter, frontier, bearing)
