@@ -46,6 +46,8 @@
     }
     label { font-size: 0.75rem; font-weight: 600; color: var(--muted); display: block; margin-bottom: 0.15rem; }
     #route-info { font-size: 0.78rem; color: var(--text); overflow-wrap: anywhere; }
+    #route-info-pois { font-size: 0.75rem; color: var(--muted); overflow-wrap: anywhere; }
+    #route-info-pois.error { color: var(--danger); font-weight: 600; }
     .route-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; }
     #route-reverse {
       flex: none; padding: 0.25rem 0.55rem; font-size: 0.75rem; font-weight: 600;
@@ -205,6 +207,7 @@
             <button type="button" id="route-reverse" title="Re-plan the same points in the opposite order — reversing RE-ROUTES (the engine respects one-way roads), unlike riding the same GPX back">⇄ reverse</button>
           </div>
           <div id="route-info">—</div>
+          <div id="route-info-pois" class="pois-line">POI wiki: —</div>
         </div>
         <div class="full">
           <label for="uid" title="How to get it: open squadrats.com while logged in → DevTools (F12) → Application → Local Storage → lastKnownUid. It is your account id — stable; it changes only with a new account. Saved in this browser.">Squadrats uid <small>(enables squares)</small></label>

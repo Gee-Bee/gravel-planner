@@ -269,26 +269,69 @@ function getScenicBearing(start, targetKm, scenicSpots) {
   return buckets[best] > 0 ? best * 22.5 : null;
 }
 
-// Physically pulls a via onto a nearby POI's exact coordinates to force routing through it.
-// Prevents pulling multiple vias to the same POI using a Set.
-function pullViasToScenic(viasList, scenicSpots) {
-  if (!scenicSpots?.length) return viasList;
-  const PULL_MAX_KM = 1.0;
-  const usedSpots = new Set();
-  return viasList.map((v) => {
-    if (v.name) return v;
-    let bestSpot = null, bestDist = PULL_MAX_KM;
-    for (const s of scenicSpots) {
-      if (usedSpots.has(s.name)) continue;
-      const d = distanceKm(v, s);
-      if (d < bestDist) { bestDist = d; bestSpot = s; }
+// B2.1 — only POIs the ≤800 m snap (B1.1) can absorb become named vias: each
+// rides the leg at the km of its nearest route point, a lattice pin within
+// PIN_YIELD_KM yields its slot to the POI, nothing is glued onto the route.
+const SCENIC_SNAP_KM = 0.8;
+const PIN_YIELD_KM = 1.2;
+const SCENIC_MIN_KM = 1.0; // nothing named right at the start approach (A5.4)
+
+/**
+ * Named wiki POIs ordered with the generic lattice pins along leg-1; one via
+ * per ≤PIN_YIELD cluster, lattices (first match wins) or POIs, by km.
+ */
+function viasThruScenic(legCoords, start, scenicSpots, stepKm) {
+  if (!legCoords || legCoords.length < 8) return [];
+  const { P, cum, kx } = planar(legCoords, start);
+  const nearest = (lon, lat) => {
+    const qx = (lon - start.lon) * kx, qy = (lat - start.lat) * KLAT;
+    let best = { km: 0, d: Infinity };
+    for (let i = 0; i < P.length; i++) {
+      const d = Math.hypot(P[i].x - qx, P[i].y - qy);
+      if (d < best.d) best = { km: cum[i], d };
     }
-    if (bestSpot) {
-      usedSpots.add(bestSpot.name);
-      return { lon: bestSpot.lon, lat: bestSpot.lat, name: bestSpot.name };
+    return best;
+  };
+  const named = (scenicSpots ?? [])
+    .map((s) => ({ lon: s.lon, lat: s.lat, name: s.name, ...nearest(s.lon, s.lat) }))
+    .filter((s) => s.d <= SCENIC_SNAP_KM && s.km >= SCENIC_MIN_KM)
+    .sort((a, b) => a.km - b.km);
+  const lattice = ringViasIdx(legCoords, start, stepKm).map((i) => ({
+    lon: start.lon + P[i].x / kx,
+    lat: start.lat + P[i].y / KLAT,
+    km: cum[i], d: 0,
+  }));
+  const kept = [];
+  for (const v of [...lattice, ...named].sort((a, b) => a.km - b.km)) {
+    const prev = kept[kept.length - 1];
+    if (prev && v.km - prev.km < PIN_YIELD_KM) {
+      if (v.name && !prev.name) kept[kept.length - 1] = v; // POI replaces the pin
+      continue; // second POI of a cluster or a pin inside its shadow
     }
-    return v;
-  });
+    kept.push(v);
+  }
+  return kept.map(({ lon, lat, name }) => (name ? { lon, lat, name } : { lon, lat }));
+}
+
+// D5 — named via CPs at km positions measured along the DELIVERY geometry.
+function poiKmList(coords, start, vias) {
+  const named = vias?.filter((v) => v.name) ?? [];
+  if (!named.length || !coords?.length) return [];
+  const { P, cum, kx } = planar(coords, start);
+  return named
+    .map((v) => ({ name: v.name, km: nearestKm(P, cum, start, kx, v.lon, v.lat).km }))
+    .sort((a, b) => a.km - b.km)
+    .map(({ name, km }) => ({ name, km: +km.toFixed(1) }));
+}
+
+function nearestKm(P, cum, start, kx, lon, lat) {
+  const qx = (lon - start.lon) * kx, qy = (lat - start.lat) * KLAT;
+  let best = { km: 0, d: Infinity };
+  for (let i = 0; i < P.length; i++) {
+    const d = Math.hypot(P[i].x - qx, P[i].y - qy);
+    if (d < best.d) best = { km: cum[i], d };
+  }
+  return best;
 }
 
 // --- Frontier Aiming ---
@@ -398,9 +441,9 @@ export async function planRoutes(params) {
       ringCoords: ring.coords,
       splicedKm: ring.nubKm,
       ringKm: +ringCum[ringCum.length - 1].toFixed(2),
-      // Physically drag the generated vias to nearby scenic POIs
-      vias: pullViasToScenic(ringVias(leg1, start), scenicSpots),
-      sparseVias: pullViasToScenic(ringVias(leg1, start, RING_VIA_SPARSE_STEP_KM), scenicSpots),
+      // B2.1 — named wiki POIs ride the leg; the lattice keeps the corridor
+      vias: viasThruScenic(leg1, start, scenicSpots, RING_VIA_STEP_KM),
+      sparseVias: viasThruScenic(leg1, start, scenicSpots, RING_VIA_SPARSE_STEP_KM),
       fresh, freshInho, scenic,
       score: fresh * 10000 + freshInho * 10 + scenic * 100
     };
@@ -467,6 +510,7 @@ export async function planRoutes(params) {
           probeKm: pre.probeKm,
           ringKm: pre.ringKm,
           nubKm: pre.splicedKm,
+          pois: poiKmList(att.deliveryCoords, start, att.activeVias),
           doubledKm: att.doubledKm,
           viaCount: att.activeVias.length,
           scenic: pre.scenic,

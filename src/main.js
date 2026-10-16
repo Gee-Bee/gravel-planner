@@ -50,6 +50,7 @@ const configStatusEl = document.getElementById('config-status');
 const poisEditorEl = document.getElementById('pois-editor');
 const addPoiBtn = document.getElementById('add-poi');
 const poiRowTpl = document.getElementById('poi-row-tpl');
+const poiInfoEl = document.getElementById('route-info-pois');
 
 mountHeaderIcon(Route);
 
@@ -459,7 +460,7 @@ form.addEventListener('submit', async (e) => {
       setStatus(why, true);
       return;
     }
-    const { trackname, measuredKm, nubKm, viaCount, pinMode, cells, aimedKm, bearing, bearingDeviation, previewUrl } = result;
+    const { trackname, measuredKm, nubKm, viaCount, pinMode, cells, aimedKm, bearing, bearingDeviation, previewUrl, pois } = result;
     const note = [
       result.relaxed ? 'relaxed gates — no candidate passed strictly' : null,
       nubKm > 0 ? `finger ${nubKm} km spliced` : 'clean probe',
@@ -475,6 +476,7 @@ form.addEventListener('submit', async (e) => {
         : null,
     ].filter(Boolean).join(', ');
     renderPreview(`${trackname} — ${measuredKm?.toFixed(1) ?? '?'} km [${note}]`, previewUrl);
+    renderPois(pois);
   } catch (err) {
     console.error(err);
     // HttpError carries the exact URL — shown as-is, no retry (§0.3).
@@ -503,6 +505,27 @@ function renderPreview(trackname, url) {
   m.rel = 'noopener noreferrer';
   m.textContent = 'squares map';
   statusEl.append(m);
+}
+
+// D5 — named wiki POIs riding the route: „name @ km" list + real distance
+// gap to the previous CP (A6-style km table without user-side arithmetic).
+function renderPois(pois) {
+  if (!pois?.length) {
+    poiInfoEl.textContent = 'POI wiki: none within 800 m of the route (B2.1).';
+    poiInfoEl.classList.remove('error');
+    return;
+  }
+  poiInfoEl.textContent = '';
+  poiInfoEl.append('POI wiki: ');
+  let lastKm = 0;
+  pois.forEach((p, i) => {
+    if (i) poiInfoEl.append(' · ');
+    const b = document.createElement('b');
+    b.textContent = p.name;
+    poiInfoEl.append(b, ` @${p.km} km (+${Math.round((p.km - lastKm) * 10) / 10})`);
+    lastKm = p.km;
+  });
+  poiInfoEl.classList.remove('error');
 }
 
 function setStatus(msg, isError = false) {

@@ -18,16 +18,16 @@ export class HttpError extends Error {
 }
 
 /**
- * B1 request URL, named via "lon,lat,NAME" (B1.2). The UPLOADED profile (B5)
- * already carries the B1.4 flags (prefer_unpaved/avoid_noise default TRUE in
- * CHAT_BROUTER_PROFILE.md), so URL params would only duplicate it — they are
- * sent for STOCK gravel only (the upload-failure fallback, whose text has the
- * quaelnix defaults). opts.plain drops the via-correction flags there too
- * (preview parity — bikerouter ignores profile:* params, B3); for a custom
- * id plain is a no-op (no flags either way).
+ * B1 request URL. Interior points with a `name` travel as named vias
+ * "lon,lat,NAME" (B1.2) — a routing via + <wpt><name> in GPX export; the
+ * name stays RAW here (URLSearchParams encodes it once, the backend decodes
+ * the query once). B1.3: first/last points (from/to) stay plain.
  */
 export function buildUrl(points, opts = {}) {
-  const lonlats = points.map((p) => `${p.lon},${p.lat}`).join('|');
+  const lonlats = points.map((p, i) => {
+    const name = i > 0 && i < points.length - 1 && p.name ? `,${p.name}` : '';
+    return `${p.lon},${p.lat}${name}`;
+  }).join('|');
   const stock = (opts.profile ?? PROFILE) === PROFILE;
   const flags = !stock
     ? {}
