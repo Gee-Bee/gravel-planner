@@ -51,7 +51,7 @@ const PARITY_TOL_KM = 3;
 const DOUBLED_TOL_KM = 2;
 // A usable ring must retain most of its target distance after splicing dead ends.
 const RING_MIN_FACTOR = 0.75;
-const FRONTIER_REACH = 1.4;
+
 const SCENIC_REACH_KM = 1.5;
 
 const MAX_FETCHES = 22;
@@ -342,7 +342,11 @@ function nearestKm(P, cum, start, kx, lon, lat) {
  */
 export function getDiverseFrontiers(start, polygons, targetKm, sector = null) {
   if (!polygons) return [];
-  const bbox = bboxAroundKm(start, (targetKm / 2) * FRONTIER_REACH);
+  // Budget math (lozenge: out + back × inflation): the ring budget `targetKm`
+  // buys roughly targetKm/(2·ROAD_INFLATION) km of air reach — frontiers
+  // beyond that would force the ring (or a doubled approach) well past D.
+  const maxAirRadius = (targetKm / (2 * ROAD_INFLATION)) * 1.15;
+  const bbox = bboxAroundKm(start, maxAirRadius);
   const visited = visitedCellsInBbox(polygons, bbox);
   if (visited.size === 0) return [];
 
@@ -351,6 +355,9 @@ export function getDiverseFrontiers(start, polygons, targetKm, sector = null) {
     const [i, j] = key.split(':').map(Number);
     const c = cellCenter(i, j);
     const d = distanceKm(start, c);
+    // HARD budget gate — squares unreachable within D are simply not aimed at;
+    // with none in reach the planner lives on a plain scenic ring instead.
+    if (d > maxAirRadius) continue;
     const b = bearingDeg(start, c);
     if (sector != null) {
       if (Math.abs(((b - sector + 540) % 360) - 180) > 45) continue;
@@ -380,8 +387,14 @@ export function getDiverseFrontiers(start, polygons, targetKm, sector = null) {
 
 export function buildFrontierAnchors(start, aim, targetKm) {
   if (!aim) return null;
-  // Deep loop penetration offset laterally by LOOP_TIP_KM
-  const maxDepthKm = Math.max(aim.dKm + 3, (targetKm / ROAD_INFLATION) * 0.52);
+  // Loop depth targets the budget radius so near frontiers still use the whole
+  // budget; a hard ×1.2 cap keeps the anchor inside the budget (+15% slack) —
+  // no more "+3 km blind penetration" bending small-D rings into long kishkas.
+  const budgetRadius = targetKm / (2 * ROAD_INFLATION);
+  const maxDepthKm = Math.min(
+    Math.max(aim.dKm + 1.5, budgetRadius),
+    budgetRadius * 1.2,
+  );
   const alphaDeg = Math.min(30, Math.max(15, (LOOP_TIP_KM / maxDepthKm) * (180 / Math.PI)));
   const b0 = destination(start, ((aim.bearingDeg + alphaDeg) % 360 + 360) % 360, maxDepthKm);
   return [aim.cell, b0];
