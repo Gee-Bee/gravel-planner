@@ -25,7 +25,7 @@ Gravel route planning from a requested distance D, with GPX export (stages A–D
 │   └── api/
 │       ├── brouter.js  # B1 fetch (gravel + 4 flags), B3 preview link, HttpError
 │       ├── squadrats.js# A4.1 — trophy GeoJSON (2 GETs, no auth), session cache, HttpError
-│       └── wikipedia.js# B2 geosearch stub (Overpass retired)
+│       └── wikipedia.js# B2 geosearch over tiled bbox
 ```
 
 ## Run locally

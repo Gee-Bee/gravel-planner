@@ -1,4 +1,5 @@
-// Planning pipeline v7.3 — unified exploration, robust gates, scenic POIs.
+// Planning pipeline v7.3 — unified exploration, robust gates, scenic POIs
+// (Wikipedia geosearch, B2 — Overpass is retired).
 // Route model: the checked points in list order ARE the route — first = start,
 // the rest are stops in visit order; a stop back at the start (a single point,
 // or the first row duplicated last) closes the loop, anything else is one-way.
@@ -14,7 +15,7 @@ import {
   distanceKm,
 } from './geometry.js';
 import { countNewCells, visitedCellsInBbox } from './squares.js';
-import { fetchScenicSpots } from './api/osm.js';
+import { searchPois } from './api/wikipedia.js';
 import {
   buildUrl,
   fetchRouteGeojson,
@@ -371,7 +372,7 @@ export async function planRoutes(params) {
     ? (Number.isFinite(deg) ? ((deg % 360) + 360) % 360 : 0)
     : manual ? BEARINGS[params.bearingKey] ?? BEARINGS.n : null;
 
-  const scenicSpots = await fetchScenicSpots(bboxAroundKm(start, params.targetKm));
+  const scenicSpots = await searchPois(bboxAroundKm(start, params.targetKm));
   let fetches = 0;
 
   const fetchCounted = async (pts, opts = {}) => {
